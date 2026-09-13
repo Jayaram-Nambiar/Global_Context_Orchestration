@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENGINE_PATH="$SCRIPT_DIR/../src/engine.py"
+python "$ENGINE_PATH" "$@"
