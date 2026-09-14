@@ -507,7 +507,7 @@ def parse_generic_file(content: str, lang: str):
         elif lang in ("csharp", "java"):
             m = re.search(r'(?:public|private|protected|internal)?\s*(?:static\s+)?class\s+([a-zA-Z0-9_]+)', sline)
             if m:
-                classes.append({"name": m_group(1) if hasattr(m, "group") else m.group(1), "line": idx})
+                classes.append({"name": m.group(1), "line": idx})
             m_fn = re.search(r'(?:public|private|protected|internal)\s+(?:static\s+)?(?:async\s+)?[\w<>\[\], ?]+\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)', sline)
             if m_fn:
                 functions.append({"name": m_fn.group(1), "line": idx})
