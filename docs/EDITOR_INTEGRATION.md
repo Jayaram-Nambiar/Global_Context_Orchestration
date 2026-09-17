@@ -18,6 +18,7 @@ You can automatically configure all supported editors with a single command:
 ```bash
 ctx mcp --install
 ```
+This writes the absolute Python interpreter path and `-u` (unbuffered stdio) into each editor config. Manual examples below use `python`; prefer the installer's resolved path on Windows.
 Or run the deployment scripts:
 - **Windows**: `powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1`
 - **macOS / Linux**: `bash scripts/deploy.sh`
@@ -33,6 +34,7 @@ Or run the deployment scripts:
       "agent-context-engine": {
         "command": "python",
         "args": [
+          "-u",
           "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"
         ]
       }
@@ -52,6 +54,7 @@ Or run the deployment scripts:
       "agent-context-engine": {
         "command": "python",
         "args": [
+          "-u",
           "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"
         ]
       }
@@ -68,6 +71,7 @@ Or run the deployment scripts:
       "agent-context-engine": {
         "command": "python",
         "args": [
+          "-u",
           "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"
         ]
       }
@@ -86,6 +90,7 @@ Or run the deployment scripts:
         "type": "local",
         "command": [
           "python",
+          "-u",
           "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"
         ],
         "enabled": true

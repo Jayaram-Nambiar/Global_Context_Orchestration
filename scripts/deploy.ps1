@@ -37,10 +37,15 @@ Copy-Item -Path $mcpSource -Destination (Join-Path $engineDir 'mcp_server.py') -
 Write-Host "[+] Installed mcp_server.py -> $engineDir\mcp_server.py" -ForegroundColor Green
 
 # 3. Create Launchers in ~/.agent-context-engine
-$cmdLauncher = "@echo off`r`npython `"%USERPROFILE%\.agent-context-engine\engine.py`" %*`r`n"
+$pythonExe = $null
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+if ($pythonCmd) { $pythonExe = $pythonCmd.Source }
+if (-not $pythonExe) { $pythonExe = 'python' }
+
+$cmdLauncher = "@echo off`r`n`"$pythonExe`" `"%USERPROFILE%\.agent-context-engine\engine.py`" %*`r`n"
 [IO.File]::WriteAllText((Join-Path $engineDir 'ctx.cmd'), $cmdLauncher)
 
-$ps1Launcher = "& python `"`$HOME\.agent-context-engine\engine.py`" @args`r`n"
+$ps1Launcher = "& `"$pythonExe`" `"`$HOME\.agent-context-engine\engine.py`" @args`r`n"
 [IO.File]::WriteAllText((Join-Path $engineDir 'ctx.ps1'), $ps1Launcher)
 
 $bashLauncher = "#!/usr/bin/env bash`npython `"`$HOME/.agent-context-engine/engine.py`" `"`$@`"`n"

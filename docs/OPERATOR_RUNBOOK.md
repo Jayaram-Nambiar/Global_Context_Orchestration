@@ -107,10 +107,14 @@ Runs a lightning-fast local syntax check on all recently changed files (preventi
 Views a specific chunk of lines from a file. (Useful for AI agents to save tokens).
 - **Usage**: `ctx slice <filename> <start_line> <end_line>`
 - **Example**: `ctx slice src/main.py 10 50`
+- Ranges are clamped to **150 lines**. Reversed start/end values are swapped.
 
 ### `ctx graph`
 Analyzes your project to find circular dependencies and maps out the optimal order to edit files.
 - **Usage**: `ctx graph`
+
+### `ctx --version`
+Prints the installed engine version.
 
 ---
 
@@ -128,6 +132,18 @@ Analyzes your project to find circular dependencies and maps out the optimal ord
 ### Issue: `ctx mcp --install` says "skipped (not installed)" for my editor
 - **Cause**: The configuration file for that specific editor does not exist on your machine, usually because the editor has never been opened.
 - **Fix**: Open the AI editor (e.g., Cursor or OpenCode) at least once so it generates its default configuration files, then run `ctx mcp --install` again.
+
+### Issue: The MCP tool shows "failed during live tool discovery" or `Unexpected token '[ctx map]' is not valid JSON`
+- **Cause**: The host (Cursor, Claude Desktop, OpenCode) parses every stdout line as JSON-RPC. If the server prints CLI banners to stdout, the connection is killed.
+- **Fix**: Update to engine 1.1.1+, redeploy, then run `ctx mcp --install`. Reload the editor's MCP servers. stdout is reserved for JSON-RPC; banners go to stderr.
+
+### Issue: `ctx map` refuses to run on my home folder
+- **Cause**: Mapping `$HOME` or a drive root would walk tens of thousands of files and time out MCP clients.
+- **Fix**: Run `ctx map` from the project repository root, or pass that directory explicitly.
+
+### Issue: `ctx mcp --install` skipped an editor with "invalid existing config"
+- **Cause**: The editor config file exists but is not valid JSON (for example a trailing comma). The installer will not overwrite it.
+- **Fix**: Repair the JSON, then re-run `ctx mcp --install`.
 
 ### Issue: Git Commits are being blocked by a syntax error
 - **Cause**: The pre-commit hook runs `ctx check` automatically. You have a syntax error in your code!

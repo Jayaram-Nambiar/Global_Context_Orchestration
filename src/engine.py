@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 IGNORE_DIRS = {
     "node_modules", ".git", "__pycache__", "venv", ".venv", "env", ".env",
     "dist", "build", "target", "bin", "obj", ".next", ".nuxt", ".turbo",
@@ -68,6 +68,52 @@ LANGUAGE_MAP = {
     ".ex": "elixir",
     ".exs": "elixir",
 }
+
+SLICE_MAX_LINES = 150
+MAP_MAX_FILES = 8000
+CHECK_TIMEOUT_SEC = 20
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI color sequences from captured CLI output."""
+    return _ANSI_RE.sub("", text or "")
+
+
+def relposix(path: Path, root: Path) -> str:
+    """Python 3.8-safe relative POSIX path; falls back to the absolute string."""
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def is_unsafe_workspace(path: Path) -> bool:
+    """True for filesystem roots and the user home directory (accidental full-disk scans)."""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return True
+    if resolved.parent == resolved:
+        return True
+    try:
+        if resolved == Path.home().resolve():
+            return True
+    except OSError:
+        return False
+    return False
+
+
+def _run_checker(cmd):
+    """Run a syntax checker with a hard timeout. Returns (returncode, error_text)."""
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=CHECK_TIMEOUT_SEC)
+        return res.returncode, (res.stderr or res.stdout).strip()
+    except subprocess.TimeoutExpired:
+        return 1, f"Timed out after {CHECK_TIMEOUT_SEC}s: {' '.join(str(c) for c in cmd[:4])}"
+    except OSError as e:
+        return 1, str(e)
+
 
 # --- Structural Pattern Extractors ---
 
@@ -635,6 +681,12 @@ def cmd_map(workspace_path: Path):
     """Scans repository and generates minified .agent-context.json metadata map."""
     start_time = time.time()
     workspace_path = workspace_path.resolve()
+    if is_unsafe_workspace(workspace_path):
+        print(
+            f"\033[1;31m[ctx map]\033[0m Refusing to index filesystem root or home directory: {workspace_path}",
+            file=sys.stderr,
+        )
+        return 1
 
     index_data = {
         "meta": {
@@ -652,8 +704,13 @@ def cmd_map(workspace_path: Path):
     total_lines = 0
     total_symbols = 0
     raw_size_bytes = 0
+    truncated = False
+    stop_walk = False
 
     for root, dirs, files in os.walk(workspace_path):
+        if stop_walk:
+            dirs[:] = []
+            continue
         # Prune ignored directories in-place
         dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith(".")]
 
@@ -661,6 +718,8 @@ def cmd_map(workspace_path: Path):
             file_path = Path(root) / file
             ext = file_path.suffix.lower()
 
+            if file_path.name == ".agent-context.json":
+                continue
             if ext in IGNORE_EXTENSIONS or ext not in LANGUAGE_MAP:
                 continue
 
@@ -735,8 +794,15 @@ def cmd_map(workspace_path: Path):
                     entry["error"] = parsed["error"]
 
                 index_data["files"][rel_path] = entry
+                if len(index_data["files"]) >= MAP_MAX_FILES:
+                    truncated = True
+                    stop_walk = True
+                    dirs[:] = []
+                    break
 
     index_data["meta"]["total_files"] = len(index_data["files"])
+    if truncated:
+        index_data["meta"]["truncated"] = True
     index_data["meta"]["total_lines"] = total_lines
     index_data["meta"]["total_symbols"] = total_symbols
 
@@ -763,13 +829,16 @@ def cmd_map(workspace_path: Path):
     print(f"  Dependency Graph: {index_data['graph']['total_nodes']} nodes, {index_data['graph']['total_edges']} internal edges")
     print(f"  Context Map:      {out_file.name} ({out_size / 1024:.1f} KB, ~{est_map_tokens:,} tokens)")
     print(f"  Token Savings:    ~{pct_savings}% reduction vs raw files (~{est_raw_tokens:,} tokens)")
+    if truncated:
+        print(f"  \033[1;33mTruncated:\033[0m hit {MAP_MAX_FILES}-file cap; re-run against a tighter directory.")
     return 0
 
 def cmd_graph(workspace_path: Path):
     """Outputs dependency topology, entry points, cycles, and recommended edit order."""
     context_file = workspace_path / ".agent-context.json"
     if not context_file.is_file():
-        cmd_map(workspace_path)
+        if cmd_map(workspace_path) != 0:
+            return 1
 
     try:
         with open(context_file, "r", encoding="utf-8") as f:
@@ -814,6 +883,12 @@ def cmd_graph(workspace_path: Path):
 def cmd_check(workspace_path: Path, check_all: bool = False):
     """Executes native local compilation checks on changed or selected files."""
     workspace_path = workspace_path.resolve()
+    if is_unsafe_workspace(workspace_path):
+        print(
+            f"\033[1;31m[ctx check]\033[0m Refusing to scan filesystem root or home directory: {workspace_path}",
+            file=sys.stderr,
+        )
+        return 1
     changed_files = []
 
     if check_all:
@@ -871,15 +946,13 @@ def cmd_check(workspace_path: Path, check_all: bool = False):
     passes = 0
 
     for file_path in changed_files:
-        rel_path = file_path.relative_to(workspace_path).as_posix() if file_path.is_relative_to(workspace_path) else str(file_path)
+        rel_path = relposix(file_path, workspace_path)
         ext = file_path.suffix.lower()
 
         # Python syntax validation via py_compile
         if ext == ".py":
-            cmd = [sys.executable, "-m", "py_compile", str(file_path)]
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            if res.returncode != 0:
-                err_clean = res.stderr.strip() or res.stdout.strip()
+            code, err_clean = _run_checker([sys.executable, "-m", "py_compile", str(file_path)])
+            if code != 0:
                 failures.append((rel_path, err_clean))
             else:
                 passes += 1
@@ -900,58 +973,59 @@ if ($errors.Count -gt 0) {{
     exit 1
 }}
 """
-            res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script], capture_output=True, text=True)
-            if res.returncode != 0:
-                err_clean = res.stderr.strip() or res.stdout.strip()
-                failures.append((rel_path, err_clean))
-            else:
-                passes += 1
-                print(f"  \033[1;32m[PASS]\033[0m {rel_path} (PowerShell)")
+            try:
+                res = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+                    capture_output=True,
+                    text=True,
+                    timeout=CHECK_TIMEOUT_SEC,
+                )
+                if res.returncode != 0:
+                    failures.append((rel_path, (res.stderr or res.stdout).strip()))
+                else:
+                    passes += 1
+                    print(f"  \033[1;32m[PASS]\033[0m {rel_path} (PowerShell)")
+            except subprocess.TimeoutExpired:
+                failures.append((rel_path, f"Timed out after {CHECK_TIMEOUT_SEC}s"))
 
-        # JavaScript / TypeScript via Node --check
+        # JavaScript via Node --check (not TS/JSX)
         elif ext in (".js", ".mjs", ".cjs") and has_node:
-            cmd = ["node", "--check", str(file_path)]
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            if res.returncode != 0:
-                failures.append((rel_path, res.stderr.strip()))
+            code, err_clean = _run_checker(["node", "--check", str(file_path)])
+            if code != 0:
+                failures.append((rel_path, err_clean))
             else:
                 passes += 1
                 print(f"  \033[1;32m[PASS]\033[0m {rel_path} (Node)")
 
         # Ruby syntax check
         elif ext in (".rb", ".rake") and has_ruby:
-            cmd = ["ruby", "-c", str(file_path)]
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            if res.returncode != 0:
-                failures.append((rel_path, res.stderr.strip()))
+            code, err_clean = _run_checker(["ruby", "-c", str(file_path)])
+            if code != 0:
+                failures.append((rel_path, err_clean))
             else:
                 passes += 1
                 print(f"  \033[1;32m[PASS]\033[0m {rel_path} (Ruby)")
 
         # PHP syntax check
         elif ext == ".php" and has_php:
-            cmd = ["php", "-l", str(file_path)]
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            if res.returncode != 0:
-                failures.append((rel_path, res.stderr.strip() or res.stdout.strip()))
+            code, err_clean = _run_checker(["php", "-l", str(file_path)])
+            if code != 0:
+                failures.append((rel_path, err_clean))
             else:
                 passes += 1
                 print(f"  \033[1;32m[PASS]\033[0m {rel_path} (PHP)")
 
         # JSON syntax validation
         elif ext == ".json":
-            cmd = [sys.executable, "-m", "json.tool", str(file_path)]
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            if res.returncode != 0:
-                failures.append((rel_path, res.stderr.strip()))
+            code, err_clean = _run_checker([sys.executable, "-m", "json.tool", str(file_path)])
+            if code != 0:
+                failures.append((rel_path, err_clean))
             else:
                 passes += 1
                 print(f"  \033[1;32m[PASS]\033[0m {rel_path} (JSON)")
 
         else:
-            # Fallback pass for file types without dedicated CLI syntax checker installed
-            passes += 1
-            print(f"  \033[1;32m[PASS]\033[0m {rel_path} (Checked)")
+            print(f"  \033[1;33m[SKIP]\033[0m {rel_path} (no local syntax checker)")
 
     print()
     if failures:
@@ -961,6 +1035,10 @@ if ($errors.Count -gt 0) {{
             for line in err.splitlines()[:5]:
                 print(f"      {line}")
         return 1
+
+    if passes == 0:
+        print("\033[1;33m[ctx check]\033[0m No files had a local syntax checker available.")
+        return 0
 
     print(f"\033[1;32m[ctx check SUCCESS]\033[0m All {passes} inspected file(s) passed syntax validation.")
     return 0
@@ -979,8 +1057,28 @@ def cmd_slice(file_path: Path, start_line: int, end_line: int):
         return 1
 
     total = len(lines)
+    if total == 0:
+        print(f"\033[1;33m=== Slice: {file_path.name} (empty file) ===\033[0m")
+        return 0
+
+    try:
+        start_line = int(start_line)
+        end_line = int(end_line)
+    except (TypeError, ValueError):
+        print("\033[1;31mError:\033[0m start and end must be integers.", file=sys.stderr)
+        return 1
+
+    if end_line < start_line:
+        start_line, end_line = end_line, start_line
     start_line = max(1, start_line)
-    end_line = min(total, end_line)
+    end_line = min(total, max(start_line, end_line))
+    if end_line - start_line + 1 > SLICE_MAX_LINES:
+        end_line = start_line + SLICE_MAX_LINES - 1
+        print(
+            f"\033[1;33m[ctx slice]\033[0m Range clamped to {SLICE_MAX_LINES} lines "
+            f"({start_line}-{end_line} of {total}).",
+            file=sys.stderr,
+        )
 
     print(f"\033[1;36m=== Slice: {file_path.name} (Lines {start_line}-{end_line} of {total}) ===\033[0m")
     for idx in range(start_line - 1, end_line):
@@ -993,7 +1091,8 @@ def cmd_query(workspace_path: Path, query_term: str):
     context_file = workspace_path / ".agent-context.json"
     if not context_file.is_file():
         print(f"\033[1;33m[ctx]\033[0m No .agent-context.json found. Running 'ctx map' first...")
-        cmd_map(workspace_path)
+        if cmd_map(workspace_path) != 0:
+            return 1
 
     try:
         with open(context_file, "r", encoding="utf-8") as f:
@@ -1009,6 +1108,12 @@ def cmd_query(workspace_path: Path, query_term: str):
         for cls in info.get("classes", []):
             if query_lower in cls["name"].lower():
                 matches.append((rel_path, cls["line"], f"class {cls['name']}", cls.get("methods", [])))
+            for method in cls.get("methods", []):
+                method_name = method if isinstance(method, str) else str(method.get("name", ""))
+                if method_name and query_lower in method_name.lower():
+                    matches.append(
+                        (rel_path, cls.get("line", "-"), f"method {cls['name']}.{method_name}", [])
+                    )
         for fn in info.get("functions", []):
             if query_lower in fn["name"].lower():
                 args = ", ".join(fn.get("args", []))
@@ -1034,6 +1139,7 @@ def main():
         description="Agent Context Engine (ctx): Global Token Optimization & Verification Utility",
         prog="ctx"
     )
+    parser.add_argument("--version", action="version", version=f"ctx {VERSION}")
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
 
     # map

@@ -1,7 +1,7 @@
 # Agent Context Engine (`ctx`)
 
-[![Tests](https://img.shields.io/badge/tests-36%20passed-brightgreen.svg)](#automated-testing)
-[![MCP-Protocol](https://img.shields.io/badge/MCP-2024--11--05%20compliant-blueviolet.svg)](#model-context-protocol-mcp-integration)
+[![Tests](https://img.shields.io/badge/tests-51%20passed-brightgreen.svg)](#automated-testing)
+[![MCP-Protocol](https://img.shields.io/badge/MCP-2025--06--18%20compliant-blueviolet.svg)](#model-context-protocol-mcp-integration)
 [![Zero-Cloud](https://img.shields.io/badge/cloud-zero%20external%20services-blue.svg)](#design-principles)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero%20external%20pkgs-success.svg)](#design-principles)
 [![Token-Reduction](https://img.shields.io/badge/tokens-90%25%2B%20reduction-orange.svg)](#token-economics)
@@ -63,7 +63,7 @@ Traditional AI coding workflows suffer from two primary failure modes:
 ## Features
 
 - **Zero Cloud & Zero Third-Party Dependencies**: Runs strictly on standard library Python and native host binaries. Zero vector databases, zero pip installs, zero cloud dependencies.
-- **Model Context Protocol (MCP) Server (`ctx mcp`)**: Pure Python stdio JSON-RPC 2.0 server complying with MCP `2024-11-05` exposing tools: `ctx_get_map`, `ctx_query_symbol`, `ctx_slice`, `ctx_check`, `ctx_get_graph`.
+- **Model Context Protocol (MCP) Server (`ctx mcp`)**: Pure Python stdio JSON-RPC 2.0 server complying with MCP `2025-06-18` (also `2025-03-26` / `2024-11-05`) exposing tools: `ctx_get_map`, `ctx_query_symbol`, `ctx_slice`, `ctx_check`, `ctx_get_graph`. Stdio stdout is reserved for JSON-RPC; CLI diagnostics go to stderr.
 - **Architectural Dependency Graphs & Cycle Detection (`ctx graph`)**:
   - Resolves internal relative imports across all supported languages.
   - Detects circular dependency cycles using 3-color Depth-First Search.
@@ -136,12 +136,13 @@ ctx mcp --install
 
 | Command | Arguments | Purpose |
 | :--- | :--- | :--- |
-| `ctx map` | `[dir]` | Scans directory and produces minified `.agent-context.json`. Displays token savings metrics. |
+| `ctx map` | `[dir]` | Scans directory and produces minified `.agent-context.json`. Refuses filesystem root and `$HOME`. Caps at 8,000 files. |
 | `ctx graph` | `[dir]` | Visualizes entry points, circular cycles, and Kahn's topological edit ordering. |
-| `ctx check` | `[dir] [--all]` | Executes native local compilation on uncommitted git changes or recently modified files. |
-| `ctx slice` | `<file> <start> <end>` | Emits line-numbered slices of target files, enforcing the "<150 lines read" rule. |
+| `ctx check` | `[dir] [--all]` | Executes native local compilation on uncommitted git changes or recently modified files. Uncheckable types are `[SKIP]`, never a fake `[PASS]`. |
+| `ctx slice` | `<file> <start> <end>` | Emits line-numbered slices, clamped to 150 lines. |
 | `ctx query` | `<symbol> [dir]` | Looks up matching classes, methods, functions, or hooks in `.agent-context.json`. |
 | `ctx mcp` | `[--install]` | Starts stdio JSON-RPC 2.0 MCP server, or auto-configures editor profiles with `--install`. |
+| `ctx --version` |  | Prints `ctx <version>`. |
 
 ---
 
@@ -158,7 +159,7 @@ The Agent Context Engine is a first-class MCP server exposing the following 5 to
 
 ## Automated Testing
 
-Run the included comprehensive test harness (36 automated tests covering engine, parsers, dependency graphs, hooks, and MCP server):
+Run the included comprehensive test harness (engine, parsers, dependency graphs, hooks, and MCP server):
 
 ```bash
 # Via Python

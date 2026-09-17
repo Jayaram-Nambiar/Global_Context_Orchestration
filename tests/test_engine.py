@@ -11,6 +11,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 
 # Add src to python path
@@ -178,9 +179,23 @@ class TestEngineCommands(unittest.TestCase):
             "function compute(x, y) { return x + y; }\n",
             encoding="utf-8"
         )
+        (self.test_dir / "service.py").write_text(
+            "class AuthService:\n    def verify_token(self, token):\n        return True\n",
+            encoding="utf-8"
+        )
 
     def tearDown(self):
         shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def _stdout(self, fn):
+        buf = StringIO()
+        old = sys.stdout
+        sys.stdout = buf
+        try:
+            ret = fn()
+        finally:
+            sys.stdout = old
+        return ret, engine.strip_ansi(buf.getvalue())
 
     def test_cmd_map(self):
         ret = engine.cmd_map(self.test_dir)
@@ -194,19 +209,63 @@ class TestEngineCommands(unittest.TestCase):
             
         self.assertIn("meta", data)
         self.assertIn("files", data)
-        self.assertEqual(data["meta"]["total_files"], 2)
+        self.assertEqual(data["meta"]["total_files"], 3)
         self.assertIn("main.py", data["files"])
         self.assertIn("util.js", data["files"])
+        self.assertNotIn(".agent-context.json", data["files"])
+
+    def test_cmd_map_skips_generated_index(self):
+        engine.cmd_map(self.test_dir)
+        engine.cmd_map(self.test_dir)
+        data = json.loads((self.test_dir / ".agent-context.json").read_text(encoding="utf-8"))
+        self.assertNotIn(".agent-context.json", data["files"])
+
+    def test_cmd_map_truncates(self):
+        old = engine.MAP_MAX_FILES
+        engine.MAP_MAX_FILES = 1
+        try:
+            ret = engine.cmd_map(self.test_dir)
+            self.assertEqual(ret, 0)
+            data = json.loads((self.test_dir / ".agent-context.json").read_text(encoding="utf-8"))
+            self.assertTrue(data["meta"].get("truncated"))
+            self.assertEqual(data["meta"]["total_files"], 1)
+        finally:
+            engine.MAP_MAX_FILES = old
+
+    def test_cmd_map_refuses_home_and_root(self):
+        self.assertEqual(engine.cmd_map(Path.home()), 1)
+        self.assertEqual(engine.cmd_map(Path(Path.home().anchor)), 1)
 
     def test_cmd_slice(self):
         file_path = self.test_dir / "main.py"
-        ret = engine.cmd_slice(file_path, 1, 3)
+        ret, out = self._stdout(lambda: engine.cmd_slice(file_path, 1, 3))
         self.assertEqual(ret, 0)
+        self.assertIn("def main():", out)
+
+    def test_cmd_slice_clamps_and_swaps(self):
+        big = self.test_dir / "big.py"
+        big.write_text("\n".join(f"line_{i} = {i}" for i in range(1, 201)), encoding="utf-8")
+        ret, out = self._stdout(lambda: engine.cmd_slice(big, 1, 500))
+        self.assertEqual(ret, 0)
+        self.assertIn("line_1 =", out)
+        self.assertIn("line_150 =", out)
+        self.assertNotIn("line_151 =", out)
+        ret, out = self._stdout(lambda: engine.cmd_slice(big, 5, 2))
+        self.assertEqual(ret, 0)
+        self.assertIn("line_2 =", out)
+        self.assertIn("line_5 =", out)
 
     def test_cmd_query(self):
         engine.cmd_map(self.test_dir)
-        ret = engine.cmd_query(self.test_dir, "compute")
+        ret, out = self._stdout(lambda: engine.cmd_query(self.test_dir, "compute"))
         self.assertEqual(ret, 0)
+        self.assertIn("compute", out)
+
+    def test_cmd_query_finds_methods(self):
+        engine.cmd_map(self.test_dir)
+        ret, out = self._stdout(lambda: engine.cmd_query(self.test_dir, "verify_token"))
+        self.assertEqual(ret, 0)
+        self.assertIn("AuthService.verify_token", out)
 
     def test_cmd_check_clean(self):
         ret = engine.cmd_check(self.test_dir, check_all=True)
@@ -216,6 +275,14 @@ class TestEngineCommands(unittest.TestCase):
         (self.test_dir / "broken.py").write_text("def broken(:", encoding="utf-8")
         ret = engine.cmd_check(self.test_dir, check_all=True)
         self.assertEqual(ret, 1)
+
+    def test_cmd_check_skip_is_not_pass(self):
+        (self.test_dir / "types.ts").write_text("export type Id = string;\n", encoding="utf-8")
+        ret, out = self._stdout(lambda: engine.cmd_check(self.test_dir, check_all=True))
+        self.assertEqual(ret, 0)
+        self.assertIn("[SKIP]", out)
+        self.assertIn("types.ts", out)
+        self.assertNotIn("[PASS] types.ts", out)
 
     def test_cmd_graph(self):
         engine.cmd_map(self.test_dir)
@@ -375,6 +442,25 @@ class TestDependencyGraph(unittest.TestCase):
         }
         graph = engine.build_dependency_graph(files)
         self.assertGreater(len(graph["circular_dependencies"]), 0)
+
+
+class TestGenericParsers(unittest.TestCase):
+    def test_go_parser(self):
+        code = """
+package main
+import "net/http"
+type Server struct {}
+func (s *Server) Listen(addr string) error { return nil }
+func main() {}
+"""
+        parsed = engine.parse_generic_file(code, "go")
+        names = [f["name"] for f in parsed["functions"]]
+        self.assertIn("Listen", names)
+        self.assertIn("main", names)
+        self.assertEqual(parsed["classes"][0]["name"], "Server")
+
+    def test_strip_ansi(self):
+        self.assertEqual(engine.strip_ansi("\033[1;32m[ctx]\033[0m hi"), "[ctx] hi")
 
 
 if __name__ == "__main__":

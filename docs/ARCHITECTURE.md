@@ -105,12 +105,16 @@ The `check` subsystem provides deterministic, non-destructive syntax verificatio
 │ JavaScript (.js) │ node --check <file> (if node in PATH)                           │
 ├──────────────────┼─────────────────────────────────────────────────────────────────┤
 │ JSON (.json)     │ python -m json.tool <file>                                      │
+├──────────────────┼─────────────────────────────────────────────────────────────────┤
+│ Other / TS / etc │ SKIP — printed as `[SKIP]`, never a fake `[PASS]`               │
 └──────────────────┴─────────────────────────────────────────────────────────────────┘
 ```
 
 When a syntax error occurs:
 - The exact file path, line number, and compiler message are printed.
 - The process exits with exit code `1`, alerting the agent to correct the mistake immediately.
+
+Each checker subprocess has a 20-second timeout. `ctx map` / `ctx check` refuse to scan the filesystem root or the user home directory, and mapping stops at 8,000 files (`meta.truncated`).
 
 ---
 
@@ -120,3 +124,4 @@ To prevent scanning vendor dependencies and binary files, the engine enforces st
 - **Ignored Directories**: `node_modules`, `.git`, `__pycache__`, `venv`, `.venv`, `dist`, `build`, `target`, `bin`, `obj`, `.next`, `.turbo`, `.gemini`, `.cursor`, `.vscode`.
 - **Ignored Extensions**: Binaries, media, compressed archives, lockfiles (`.lock`), minified bundles (`*.min.js`, `*.bundle.js`, `*.map`).
 - **Size Bounds**: Files exceeding 500 KB are bypassed to prevent memory spikes.
+- **Workspace Bounds**: Filesystem root and `$HOME` are rejected. Walks stop after 8,000 indexed files.
