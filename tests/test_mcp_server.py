@@ -102,6 +102,38 @@ class TestMCPServerUnit(unittest.TestCase):
         self.assertIn("ctx_query_symbol", tool_names)
         self.assertIn("ctx_slice", tool_names)
         self.assertIn("ctx_check", tool_names)
+        self.assertEqual(res["result"]["resultType"], "complete")
+        self.assertEqual(res["result"]["cacheScope"], "public")
+        self.assertIsInstance(res["result"]["ttlMs"], int)
+
+    def test_server_discover(self):
+        req = {"jsonrpc": "2.0", "id": 9, "method": "server/discover", "params": {}}
+        res = self.server.handle_request(req)
+        result = res["result"]
+        self.assertEqual(result["resultType"], "complete")
+        self.assertIn("2026-07-28", result["supportedVersions"])
+        self.assertIn("2025-06-18", result["supportedVersions"])
+        self.assertEqual(result["capabilities"]["tools"]["listChanged"], False)
+        self.assertIn("instructions", result)
+        self.assertEqual(result["cacheScope"], "public")
+        self.assertEqual(
+            result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+            "agent-context-engine",
+        )
+
+    def test_initialize_echoes_2026(self):
+        req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2026-07-28",
+                "capabilities": {},
+                "clientInfo": {"name": "test-client", "version": "1.0"}
+            }
+        }
+        res = self.server.handle_request(req)
+        self.assertEqual(res["result"]["protocolVersion"], "2026-07-28")
 
     def test_call_ctx_get_map(self):
         req = {
@@ -326,6 +358,21 @@ class TestMCPServerStdio(unittest.TestCase):
                 proc.kill()
             shutil.rmtree(work, ignore_errors=True)
 
+    def test_stdio_discover_without_initialize(self):
+        """MCP 2026-07-28 clients may skip initialize and call server/discover first."""
+        proc = self._start_server()
+        payload = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": {},
+        }) + "\n"
+        stdout, _ = proc.communicate(input=payload, timeout=5)
+        response = json.loads(stdout.strip().splitlines()[0])
+        self.assertEqual(response["id"], 1)
+        self.assertEqual(response["result"]["resultType"], "complete")
+        self.assertIn("2026-07-28", response["result"]["supportedVersions"])
+
 
 class TestMCPEditorConfiguration(unittest.TestCase):
     """Verifies cross-editor MCP configuration format and non-destructive merging."""
@@ -346,7 +393,30 @@ class TestMCPEditorConfiguration(unittest.TestCase):
 
         self.mock_opencode.parent.mkdir(parents=True, exist_ok=True)
         self.mock_opencode.write_text(
-            json.dumps({"$schema": "https://opencode.ai/config.json", "instructions": ["AGENTS.md"]}),
+            json.dumps({
+                "$schema": "https://opencode.ai/config.json",
+                "instructions": ["AGENTS.md"],
+                "": "https://opencode.ai/config.json",
+            }),
+            encoding="utf-8"
+        )
+        self.mock_vscode = self.temp_dir / "Code" / "User" / "mcp.json"
+        self.mock_vscode.parent.mkdir(parents=True, exist_ok=True)
+        self.mock_vscode.write_text("", encoding="utf-8")
+        self.mock_claude_code = self.temp_dir / ".claude.json"
+        self.mock_claude_code.write_text(
+            json.dumps({
+                "projects": {
+                    "C:\\\\repo": {"mcpServers": {}}
+                },
+                "theme": "dark",
+            }),
+            encoding="utf-8"
+        )
+        self.mock_codex = self.temp_dir / ".codex" / "config.toml"
+        self.mock_codex.parent.mkdir(parents=True, exist_ok=True)
+        self.mock_codex.write_text(
+            "[mcp_servers.other]\ncommand = \"npx\"\nargs = [\"-y\", \"other\"]\n",
             encoding="utf-8"
         )
 
@@ -394,6 +464,46 @@ class TestMCPEditorConfiguration(unittest.TestCase):
             self.assertIn(sys.executable, opencode_data["mcp"]["agent-context-engine"]["command"])
             self.assertIn("-u", opencode_data["mcp"]["agent-context-engine"]["command"])
             self.assertEqual(opencode_data["instructions"], ["AGENTS.md"])
+            self.assertNotIn("", opencode_data)
+
+            vscode_data = json.loads(self.mock_vscode.read_text(encoding="utf-8"))
+            self.assertEqual(vscode_data["servers"]["agent-context-engine"]["type"], "stdio")
+            self.assertEqual(vscode_data["servers"]["agent-context-engine"]["args"][0], "-u")
+
+            claude_code_data = json.loads(self.mock_claude_code.read_text(encoding="utf-8"))
+            self.assertEqual(claude_code_data["theme"], "dark")
+            self.assertEqual(claude_code_data["projects"]["C:\\\\repo"]["mcpServers"], {})
+            self.assertEqual(
+                claude_code_data["mcpServers"]["agent-context-engine"]["type"],
+                "stdio",
+            )
+
+            codex_text = self.mock_codex.read_text(encoding="utf-8")
+            self.assertIn("[mcp_servers.other]", codex_text)
+            self.assertIn("[mcp_servers.agent-context-engine]", codex_text)
+            self.assertIn("-u", codex_text)
+
+    def test_upsert_toml_table_does_not_truncate_on_array_brackets(self):
+        existing = (
+            "[mcp_servers.agent-context-engine]\n"
+            "command = \"old\"\n"
+            "args = [\"-u\", \"old.py\"]\n"
+            "\n"
+            "[other]\n"
+            "x = 1\n"
+        )
+        block = (
+            "[mcp_servers.agent-context-engine]\n"
+            "command = \"new\"\n"
+            "args = [\"-u\", \"new.py\"]\n"
+        )
+        updated = mcp_server._upsert_toml_table(
+            existing, "mcp_servers.agent-context-engine", block
+        )
+        self.assertIn("command = \"new\"", updated)
+        self.assertIn("args = [\"-u\", \"new.py\"]", updated)
+        self.assertIn("[other]", updated)
+        self.assertIn("x = 1", updated)
 
     def test_configure_editors_skips_invalid_json(self):
         import unittest.mock as mock

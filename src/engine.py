@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 IGNORE_DIRS = {
     "node_modules", ".git", "__pycache__", "venv", ".venv", "env", ".env",
     "dist", "build", "target", "bin", "obj", ".next", ".nuxt", ".turbo",
@@ -40,6 +40,8 @@ LANGUAGE_MAP = {
     ".ts": "typescript",
     ".tsx": "typescript",
     ".gs": "google-apps-script",
+    ".vue": "vue",
+    ".svelte": "svelte",
     ".ps1": "powershell",
     ".psm1": "powershell",
     ".psd1": "powershell",
@@ -67,7 +69,54 @@ LANGUAGE_MAP = {
     ".sc": "scala",
     ".ex": "elixir",
     ".exs": "elixir",
+    ".j2": "jinja",
+    ".jinja": "jinja",
+    ".jinja2": "jinja",
+    ".njk": "jinja",
+    ".liquid": "jinja",
+    ".mmd": "mermaid",
+    ".mermaid": "mermaid",
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".sh": "shell",
+    ".bash": "shell",
+    ".zsh": "shell",
+    ".ksh": "shell",
+    ".sql": "sql",
+    ".tf": "terraform",
+    ".lua": "lua",
+    ".dart": "dart",
+    ".graphql": "graphql",
+    ".gql": "graphql",
+    ".proto": "proto",
+    ".sol": "solidity",
+    ".r": "r",
+    ".mk": "make",
 }
+
+_GENERIC_LANGS = (
+    "go", "rust", "csharp", "java", "lua", "dart", "graphql", "proto", "solidity", "r",
+)
+
+
+def language_for_path(path: Path):
+    """Map a file path to a LANGUAGE_MAP language, including extensionless names."""
+    name = path.name.lower()
+    if name in ("dockerfile", "containerfile") or name.startswith("dockerfile."):
+        return "dockerfile"
+    if name in ("makefile", "gnumakefile"):
+        return "make"
+    return LANGUAGE_MAP.get(path.suffix.lower())
+
+
+def _is_checkable_path(path: Path):
+    """True when map would index the file AND check should mention it.
+
+    Markdown is mapped only when mermaid fences exist; check has no MD parser
+    and would otherwise SKIP every README on every run.
+    """
+    lang = language_for_path(path)
+    return lang is not None and lang != "markdown"
 
 SLICE_MAX_LINES = 150
 MAP_MAX_FILES = 8000
@@ -246,6 +295,15 @@ def parse_js_ts_file(content: str):
             m = re.findall(r'\b(?:fetch|axios\.[a-z]+|UrlFetchApp\.fetch|XMLHttpRequest)\b', sline)
             if m:
                 hooks.add(m[0])
+        for gas in re.findall(
+            r'\b(?:UrlFetchApp|SpreadsheetApp|DocumentApp|GmailApp|DriveApp|'
+            r'CalendarApp|FormApp|SlidesApp|ScriptApp|HtmlService|'
+            r'CacheService|PropertiesService|Jdbc|CardService)\b',
+            sline,
+        ):
+            hooks.add(gas)
+        if "google.script.run" in sline:
+            hooks.add("google.script.run")
         if re.search(r'\b(?:child_process|execSync|spawnSync|exec|spawn|Deno\.run)\b', sline):
             hooks.add("shell/process_invocation")
 
@@ -520,8 +578,182 @@ def parse_elixir_file(content: str):
 
     return {"classes": classes, "functions": functions, "hooks": sorted(list(hooks)), "imports": sorted(list(imports))}
 
+
+def parse_jinja_file(content: str):
+    """Jinja2 / Nunjucks / Liquid macros, blocks, and template inheritance."""
+    classes, functions, hooks, imports = [], [], set(), set()
+    for idx, line in enumerate(content.splitlines(), start=1):
+        sline = line.strip()
+        if not sline:
+            continue
+        m_macro = re.search(
+            r'\{%-?\s*(?:macro|function)\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)',
+            sline,
+        )
+        if m_macro:
+            args = [a.strip().split("=")[0].strip() for a in m_macro.group(2).split(",") if a.strip()]
+            functions.append({"name": m_macro.group(1), "line": idx, "args": args})
+        m_block = re.search(r'\{%-?\s*block\s+([a-zA-Z0-9_]+)', sline)
+        if m_block:
+            classes.append({"name": m_block.group(1), "line": idx})
+        for imp in re.findall(
+            r'\{%-?\s*(?:extends|include|import|from)\s+[\'"]([^\'"]+)[\'"]',
+            sline,
+        ):
+            imports.add(imp)
+        if re.search(r'\b(?:url_for|request\.|UrlFetchApp|fetch\(|curl)\b', sline):
+            hooks.add("template/network")
+    return {"classes": classes, "functions": functions, "hooks": sorted(list(hooks)), "imports": sorted(list(imports))}
+
+
+_MERMAID_KIND = re.compile(
+    r'^\s*(flowchart|graph|sequenceDiagram|classDiagram|erDiagram|'
+    r'stateDiagram(?:-v2)?|gantt|pie|gitGraph|journey|mindmap|timeline|'
+    r'quadrantChart|sankey(?:-beta)?|xychart(?:-beta)?|kanban|'
+    r'C4Context|C4Container|C4Component)\b',
+    re.I,
+)
+
+
+def parse_mermaid_file(content: str):
+    """Diagram kind plus named participants, classes, and subgraphs."""
+    classes, functions, hooks, imports = [], [], set(), set()
+    for idx, line in enumerate(content.splitlines(), start=1):
+        sline = line.strip()
+        if not sline or sline.startswith("%%"):
+            continue
+        m_kind = _MERMAID_KIND.match(sline)
+        if m_kind:
+            classes.append({"name": m_kind.group(1), "line": idx})
+            continue
+        m_node = re.search(
+            r'^\s*(?:participant|actor|class|subgraph)\s+([A-Za-z0-9_$-]+)',
+            sline,
+            re.I,
+        )
+        if m_node:
+            functions.append({"name": m_node.group(1), "line": idx})
+    return {"classes": classes, "functions": functions, "hooks": sorted(list(hooks)), "imports": sorted(list(imports))}
+
+
+def parse_markdown_file(content: str):
+    """Index mermaid fences inside Markdown; skip files with none at map time."""
+    classes, functions, hooks, imports = [], [], set(), set()
+    for m in re.finditer(r"```mermaid[ \t]*\r?\n(.*?)```", content, re.S | re.I):
+        offset_line = content[:m.start()].count("\n") + 1
+        inner = parse_mermaid_file(m.group(1))
+        for item in inner["classes"]:
+            item["line"] = offset_line + item.get("line", 1) - 1
+            classes.append(item)
+        for item in inner["functions"]:
+            item["line"] = offset_line + item.get("line", 1) - 1
+            functions.append(item)
+    return {"classes": classes, "functions": functions, "hooks": sorted(list(hooks)), "imports": sorted(list(imports))}
+
+
+def parse_shell_file(content: str):
+    functions, hooks, imports = [], set(), set()
+    for idx, line in enumerate(content.splitlines(), start=1):
+        sline = line.strip()
+        if not sline or sline.startswith("#"):
+            continue
+        m_fn = re.search(r'^(?:function\s+([a-zA-Z0-9_:-]+)|\s*([a-zA-Z0-9_:-]+)\s*\(\s*\))', sline)
+        if m_fn:
+            functions.append({"name": m_fn.group(1) or m_fn.group(2), "line": idx})
+        m_src = re.search(r'^(?:source|\.)\s+[\'"]?([^\s\'"]+)', sline)
+        if m_src:
+            imports.add(m_src.group(1))
+        if re.search(r'\b(?:curl|wget|ssh|scp|kubectl|docker|nc|ncat)\b', sline):
+            hooks.add("network/shell")
+    return {"classes": [], "functions": functions, "hooks": sorted(list(hooks)), "imports": sorted(list(imports))}
+
+
+def parse_sql_file(content: str):
+    classes, functions = [], []
+    for idx, line in enumerate(content.splitlines(), start=1):
+        sline = line.strip()
+        if not sline or sline.startswith("--"):
+            continue
+        m_obj = re.search(
+            r'CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?'
+            r'(TABLE|VIEW|FUNCTION|PROCEDURE|TRIGGER|INDEX|SCHEMA)\s+'
+            r'(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z0-9_."]+)',
+            sline,
+            re.I,
+        )
+        if m_obj:
+            kind = m_obj.group(1).upper()
+            name = m_obj.group(2).strip('"')
+            if kind in ("FUNCTION", "PROCEDURE"):
+                functions.append({"name": name, "line": idx})
+            else:
+                classes.append({"name": name, "line": idx})
+    return {"classes": classes, "functions": functions, "hooks": [], "imports": []}
+
+
+def parse_hcl_file(content: str):
+    classes, functions, hooks = [], [], set()
+    for idx, line in enumerate(content.splitlines(), start=1):
+        sline = line.strip()
+        if not sline or sline.startswith("#") or sline.startswith("//"):
+            continue
+        m_block = re.search(
+            r'^(resource|data|module|variable|output|provider|locals)\s+'
+            r'(?:["\']([^"\']+)["\']\s+)?(?:["\']([^"\']+)["\'])?',
+            sline,
+        )
+        if m_block:
+            kind, first, second = m_block.group(1), m_block.group(2), m_block.group(3)
+            label = ".".join([p for p in (kind, first, second) if p])
+            classes.append({"name": label, "line": idx})
+        if re.search(r'\b(?:http_request|remote-exec|local-exec|provisioner)\b', sline):
+            hooks.add("provisioner/http")
+    return {"classes": classes, "functions": functions, "hooks": sorted(list(hooks)), "imports": []}
+
+
+def parse_dockerfile(content: str):
+    classes, functions, hooks, imports = [], [], set(), set()
+    for idx, line in enumerate(content.splitlines(), start=1):
+        sline = line.strip()
+        if not sline or sline.startswith("#"):
+            continue
+        m_from = re.search(r'^FROM\s+(\S+)(?:\s+AS\s+(\S+))?', sline, re.I)
+        if m_from:
+            classes.append({"name": m_from.group(2) or m_from.group(1), "line": idx})
+        m_copy = re.search(r'^(?:COPY|ADD)\s+(.+)$', sline, re.I)
+        if m_copy:
+            imports.add(m_copy.group(1).split()[0])
+        if re.search(r'\b(?:curl|wget|apk add|apt-get)\b', sline, re.I):
+            hooks.add("network/pkg")
+        m_entry = re.search(r'^(?:ENTRYPOINT|CMD|RUN)\b', sline, re.I)
+        if m_entry:
+            functions.append({"name": m_entry.group(0).split()[0].upper(), "line": idx})
+    return {"classes": classes, "functions": functions, "hooks": sorted(list(hooks)), "imports": sorted(list(imports))}
+
+
+def parse_make_file(content: str):
+    functions = []
+    for idx, line in enumerate(content.splitlines(), start=1):
+        if not line or line.startswith("\t") or line.startswith("#") or line.startswith(" "):
+            continue
+        m = re.match(r'^([A-Za-z0-9_./%-]+)\s*:', line)
+        if m and not m.group(1).startswith("."):
+            functions.append({"name": m.group(1), "line": idx})
+    return {"classes": [], "functions": functions, "hooks": [], "imports": []}
+
+
+def parse_vue_svelte_file(content: str):
+    scripts = re.findall(r"<script\b[^>]*>(.*?)</script>", content, re.S | re.I)
+    parsed = parse_js_ts_file("\n".join(scripts))
+    m_name = re.search(r"""name\s*:\s*['"]([^'"]+)['"]""", content)
+    if m_name:
+        parsed.setdefault("classes", [])
+        parsed["classes"].append({"name": m_name.group(1), "line": 1})
+    return parsed
+
+
 def parse_generic_file(content: str, lang: str):
-    """Generic symbol extraction for Go, Rust, Java, C#."""
+    """Generic symbol extraction for Go, Rust, Java, C#, Lua, Dart, GraphQL, proto, Solidity, R."""
     functions, classes, hooks, imports = [], [], set(), set()
     for idx, line in enumerate(content.splitlines(), start=1):
         sline = line.strip()
@@ -561,12 +793,112 @@ def parse_generic_file(content: str, lang: str):
             if m_imp:
                 imports.add(m_imp.group(1))
 
+        elif lang == "lua":
+            m = re.search(r'(?:local\s+)?function\s+([a-zA-Z0-9_.:]+)\s*\(([^)]*)\)', sline)
+            if m:
+                functions.append({"name": m.group(1), "line": idx})
+
+        elif lang == "dart":
+            m_cls = re.search(r'(?:class|mixin|enum|extension)\s+([A-Za-z0-9_]+)', sline)
+            if m_cls:
+                classes.append({"name": m_cls.group(1), "line": idx})
+            m_fn = re.search(
+                r'(?:[\w<>,?\[\]\s]+)\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*(?:async\s*)?\{?',
+                sline,
+            )
+            if m_fn and m_fn.group(1) not in ("if", "for", "while", "switch", "catch"):
+                functions.append({"name": m_fn.group(1), "line": idx})
+
+        elif lang == "graphql":
+            m = re.search(
+                r'^(?:type|interface|enum|input|union|scalar|extend\s+type)\s+([A-Za-z0-9_]+)',
+                sline,
+            )
+            if m:
+                classes.append({"name": m.group(1), "line": idx})
+            m_op = re.search(r'^(?:query|mutation|subscription)\s+([A-Za-z0-9_]+)', sline)
+            if m_op:
+                functions.append({"name": m_op.group(1), "line": idx})
+
+        elif lang == "proto":
+            m = re.search(r'^(?:message|service|enum)\s+([A-Za-z0-9_]+)', sline)
+            if m:
+                classes.append({"name": m.group(1), "line": idx})
+            m_rpc = re.search(r'rpc\s+([A-Za-z0-9_]+)\s*\(', sline)
+            if m_rpc:
+                functions.append({"name": m_rpc.group(1), "line": idx})
+            m_imp = re.search(r'import\s+"([^"]+)"', sline)
+            if m_imp:
+                imports.add(m_imp.group(1))
+
+        elif lang == "solidity":
+            m = re.search(r'^(?:contract|interface|library|abstract\s+contract)\s+([A-Za-z0-9_]+)', sline)
+            if m:
+                classes.append({"name": m.group(1), "line": idx})
+            m_fn = re.search(r'function\s+([A-Za-z0-9_]+)\s*\(', sline)
+            if m_fn:
+                functions.append({"name": m_fn.group(1), "line": idx})
+
+        elif lang == "r":
+            m = re.search(r'^([A-Za-z.][A-Za-z0-9._]*)\s*(?:<-|=)\s*function\s*\(', sline)
+            if m:
+                functions.append({"name": m.group(1), "line": idx})
+
     return {
         "classes": classes,
         "functions": functions,
         "hooks": sorted(list(hooks)),
         "imports": sorted(list(imports))
     }
+
+
+def parse_file_content(lang, content):
+    """Dispatch to the language extractor. Returns None if the language is unknown."""
+    if lang == "python":
+        return parse_python_file(content)
+    if lang in ("javascript", "typescript", "google-apps-script"):
+        return parse_js_ts_file(content)
+    if lang == "powershell":
+        return parse_powershell_file(content)
+    if lang == "vbscript":
+        return parse_vbscript_file(content)
+    if lang == "kotlin":
+        return parse_kotlin_file(content)
+    if lang == "swift":
+        return parse_swift_file(content)
+    if lang in ("c", "cpp"):
+        return parse_c_cpp_file(content)
+    if lang == "ruby":
+        return parse_ruby_file(content)
+    if lang == "php":
+        return parse_php_file(content)
+    if lang == "scala":
+        return parse_scala_file(content)
+    if lang == "elixir":
+        return parse_elixir_file(content)
+    if lang == "jinja":
+        return parse_jinja_file(content)
+    if lang == "mermaid":
+        return parse_mermaid_file(content)
+    if lang == "markdown":
+        return parse_markdown_file(content)
+    if lang == "shell":
+        return parse_shell_file(content)
+    if lang == "sql":
+        return parse_sql_file(content)
+    if lang == "terraform":
+        return parse_hcl_file(content)
+    if lang == "dockerfile":
+        return parse_dockerfile(content)
+    if lang == "make":
+        return parse_make_file(content)
+    if lang in ("vue", "svelte"):
+        return parse_vue_svelte_file(content)
+    if lang in _GENERIC_LANGS:
+        return parse_generic_file(content, lang)
+    if lang == "json":
+        return {"classes": [], "functions": [], "hooks": [], "imports": []}
+    return None
 
 # --- Semantic Dependency Graph & Topological Engine ---
 
@@ -720,7 +1052,8 @@ def cmd_map(workspace_path: Path):
 
             if file_path.name == ".agent-context.json":
                 continue
-            if ext in IGNORE_EXTENSIONS or ext not in LANGUAGE_MAP:
+            lang = language_for_path(file_path)
+            if ext in IGNORE_EXTENSIONS or lang is None:
                 continue
 
             # Skip large files (> 500 KB)
@@ -733,7 +1066,6 @@ def cmd_map(workspace_path: Path):
                 continue
 
             rel_path = file_path.relative_to(workspace_path).as_posix()
-            lang = LANGUAGE_MAP[ext]
 
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
@@ -744,33 +1076,10 @@ def cmd_map(workspace_path: Path):
             file_lines = len(content.splitlines())
             total_lines += file_lines
 
-            parsed = None
-            if lang == "python":
-                parsed = parse_python_file(content)
-            elif lang in ("javascript", "typescript", "google-apps-script"):
-                parsed = parse_js_ts_file(content)
-            elif lang == "powershell":
-                parsed = parse_powershell_file(content)
-            elif lang == "vbscript":
-                parsed = parse_vbscript_file(content)
-            elif lang == "kotlin":
-                parsed = parse_kotlin_file(content)
-            elif lang == "swift":
-                parsed = parse_swift_file(content)
-            elif lang in ("c", "cpp"):
-                parsed = parse_c_cpp_file(content)
-            elif lang == "ruby":
-                parsed = parse_ruby_file(content)
-            elif lang == "php":
-                parsed = parse_php_file(content)
-            elif lang == "scala":
-                parsed = parse_scala_file(content)
-            elif lang == "elixir":
-                parsed = parse_elixir_file(content)
-            elif lang in ("go", "rust", "csharp", "java"):
-                parsed = parse_generic_file(content, lang)
-            elif lang == "json":
-                parsed = {"classes": [], "functions": [], "hooks": [], "imports": []}
+            parsed = parse_file_content(lang, content)
+            if lang == "markdown" and parsed and not parsed.get("classes") and not parsed.get("functions"):
+                total_lines -= file_lines
+                continue
 
             if parsed:
                 file_sym_count = len(parsed.get("classes", [])) + len(parsed.get("functions", []))
@@ -896,7 +1205,7 @@ def cmd_check(workspace_path: Path, check_all: bool = False):
             dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith(".")]
             for f in files:
                 p = Path(root) / f
-                if p.suffix.lower() in LANGUAGE_MAP:
+                if _is_checkable_path(p):
                     changed_files.append(p)
     else:
         # Check git status first
@@ -914,7 +1223,7 @@ def cmd_check(workspace_path: Path, check_all: bool = False):
                     if " -> " in path_str:
                         path_str = path_str.split(" -> ")[-1]
                     p = workspace_path / path_str
-                    if p.is_file() and p.suffix.lower() in LANGUAGE_MAP:
+                    if p.is_file() and _is_checkable_path(p):
                         changed_files.append(p)
         except Exception:
             pass
@@ -926,7 +1235,7 @@ def cmd_check(workspace_path: Path, check_all: bool = False):
                 dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith(".")]
                 for f in files:
                     p = Path(root) / f
-                    if p.suffix.lower() in LANGUAGE_MAP:
+                    if _is_checkable_path(p):
                         try:
                             if p.stat().st_mtime >= recent_cutoff:
                                 changed_files.append(p)
@@ -942,12 +1251,14 @@ def cmd_check(workspace_path: Path, check_all: bool = False):
     has_node = shutil.which("node") is not None
     has_ruby = shutil.which("ruby") is not None
     has_php = shutil.which("php") is not None
+    has_bash = shutil.which("bash") is not None
     failures = []
     passes = 0
 
     for file_path in changed_files:
         rel_path = relposix(file_path, workspace_path)
         ext = file_path.suffix.lower()
+        lang = language_for_path(file_path)
 
         # Python syntax validation via py_compile
         if ext == ".py":
@@ -988,8 +1299,8 @@ if ($errors.Count -gt 0) {{
             except subprocess.TimeoutExpired:
                 failures.append((rel_path, f"Timed out after {CHECK_TIMEOUT_SEC}s"))
 
-        # JavaScript via Node --check (not TS/JSX)
-        elif ext in (".js", ".mjs", ".cjs") and has_node:
+        # JavaScript / Apps Script via Node --check (not TS/JSX/Vue)
+        elif ext in (".js", ".mjs", ".cjs", ".gs") and has_node:
             code, err_clean = _run_checker(["node", "--check", str(file_path)])
             if code != 0:
                 failures.append((rel_path, err_clean))
@@ -1023,6 +1334,14 @@ if ($errors.Count -gt 0) {{
             else:
                 passes += 1
                 print(f"  \033[1;32m[PASS]\033[0m {rel_path} (JSON)")
+
+        elif lang == "shell" and has_bash:
+            code, err_clean = _run_checker(["bash", "-n", str(file_path)])
+            if code != 0:
+                failures.append((rel_path, err_clean))
+            else:
+                passes += 1
+                print(f"  \033[1;32m[PASS]\033[0m {rel_path} (bash -n)")
 
         else:
             print(f"  \033[1;33m[SKIP]\033[0m {rel_path} (no local syntax checker)")

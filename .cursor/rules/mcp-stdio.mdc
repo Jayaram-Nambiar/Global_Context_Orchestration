@@ -1,0 +1,15 @@
+---
+description: MCP stdio and editor-install rules for the ctx server
+globs: src/mcp_server.py,tests/test_mcp_server.py
+alwaysApply: false
+---
+
+# MCP stdio + installer
+
+- Isolate RPC stdout. Never `print()` JSON-RPC on `sys.stdout` after reassignment; use the captured `rpc_out`.
+- `SUPPORTED_PROTOCOL_VERSIONS` newest-first. Echo a requested `initialize` version if listed; otherwise `LATEST_PROTOCOL_VERSION`.
+- `server/discover` result: `resultType`, `supportedVersions`, `capabilities`, `ttlMs`, `cacheScope`, `_meta.io.modelcontextprotocol/serverInfo`.
+- `tools/list` is CacheableResult. Keep `TOOLS` order stable.
+- Windows: `sys.executable` + `args: ["-u", mcp_server.py]`. Never `pythonw`.
+- Invalid JSON configs: skip, do not overwrite.
+- TOML upsert: replace from `^[table]` to the next `^[` line. Array values contain `[` and must not delimit the table.

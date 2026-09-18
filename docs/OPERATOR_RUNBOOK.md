@@ -64,7 +64,7 @@ The deployment script will copy the engine to your home directory (`~/.agent-con
 
 ## 4. AI Editor Integration (MCP)
 
-To connect the engine directly to your AI IDEs (Antigravity, Cursor, Claude Desktop, or OpenCode), we use the **Model Context Protocol (MCP)**. 
+To connect the engine directly to your AI IDEs (Cursor, VS Code, Claude Desktop, Claude Code, Antigravity, OpenCode, Codex), we use the **Model Context Protocol (MCP)**. 
 
 ### Automated Setup (All OS)
 Once installed, simply run this command in your terminal:

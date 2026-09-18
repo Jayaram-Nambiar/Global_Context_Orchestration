@@ -463,5 +463,115 @@ func main() {}
         self.assertEqual(engine.strip_ansi("\033[1;32m[ctx]\033[0m hi"), "[ctx] hi")
 
 
+class TestIndustryLanguageParsers(unittest.TestCase):
+    def test_jinja2_macros_blocks_and_extends(self):
+        code = """
+{% extends "base.html" %}
+{% block content %}
+{% macro input(name, value='') %}
+  <input name="{{ name }}" value="{{ url_for('x') }}">
+{% endmacro %}
+{% include "partials/nav.html" %}
+"""
+        parsed = engine.parse_jinja_file(code)
+        self.assertTrue(any(f["name"] == "input" for f in parsed["functions"]))
+        self.assertTrue(any(c["name"] == "content" for c in parsed["classes"]))
+        self.assertIn("base.html", parsed["imports"])
+        self.assertIn("partials/nav.html", parsed["imports"])
+        self.assertIn("template/network", parsed["hooks"])
+
+    def test_mermaid_and_markdown_fence(self):
+        mmd = """
+sequenceDiagram
+    participant Client
+    participant Engine
+    Client->>Engine: ctx_get_map
+"""
+        parsed = engine.parse_mermaid_file(mmd)
+        self.assertTrue(any(c["name"] == "sequenceDiagram" for c in parsed["classes"]))
+        names = [f["name"] for f in parsed["functions"]]
+        self.assertIn("Client", names)
+        self.assertIn("Engine", names)
+
+        md = "# Title\n\n```mermaid\nflowchart TD\n```\n"
+        md_parsed = engine.parse_markdown_file(md)
+        self.assertTrue(any(c["name"] == "flowchart" for c in md_parsed["classes"]))
+        empty = engine.parse_markdown_file("# no diagrams\n")
+        self.assertEqual(empty["classes"], [])
+
+    def test_google_apps_script_hooks(self):
+        code = """
+function syncSheet() {
+  const ss = SpreadsheetApp.getActive();
+  UrlFetchApp.fetch('https://example.com');
+  google.script.run.doWork();
+}
+"""
+        parsed = engine.parse_js_ts_file(code)
+        self.assertTrue(any(f["name"] == "syncSheet" for f in parsed["functions"]))
+        self.assertIn("SpreadsheetApp", parsed["hooks"])
+        self.assertIn("google.script.run", parsed["hooks"])
+
+    def test_sql_shell_hcl_dockerfile(self):
+        sql = engine.parse_sql_file(
+            'CREATE TABLE users (id int);\nCREATE FUNCTION app.touch() RETURNS void AS $$ $$;\n'
+        )
+        self.assertTrue(any(c["name"] == "users" for c in sql["classes"]))
+        self.assertTrue(any(f["name"] == "app.touch" for f in sql["functions"]))
+
+        sh = engine.parse_shell_file(
+            "function deploy {\n  curl https://example.com\n}\nfoo() {\n  true\n}\n. ./lib.sh\n"
+        )
+        names = [f["name"] for f in sh["functions"]]
+        self.assertIn("deploy", names)
+        self.assertIn("foo", names)
+        self.assertIn("network/shell", sh["hooks"])
+
+        tf = engine.parse_hcl_file('resource "aws_s3_bucket" "logs" {}\nmodule "vpc" {}\n')
+        labels = [c["name"] for c in tf["classes"]]
+        self.assertTrue(any("aws_s3_bucket" in x for x in labels))
+        self.assertTrue(any(x.startswith("module") for x in labels))
+
+        dk = engine.parse_dockerfile("FROM python:3.11 AS runtime\nCOPY src /app\nRUN curl -s https://x\n")
+        self.assertTrue(any(c["name"] == "runtime" for c in dk["classes"]))
+        self.assertIn("network/pkg", dk["hooks"])
+
+    def test_language_for_path_and_map_integration(self):
+        self.assertEqual(engine.language_for_path(Path("Code.gs")), "google-apps-script")
+        self.assertEqual(engine.language_for_path(Path("mail.html.j2")), "jinja")
+        self.assertEqual(engine.language_for_path(Path("flow.mmd")), "mermaid")
+        self.assertEqual(engine.language_for_path(Path("Dockerfile")), "dockerfile")
+        self.assertEqual(engine.language_for_path(Path("Makefile")), "make")
+
+        work = Path(tempfile.mkdtemp())
+        try:
+            (work / "tpl.j2").write_text('{% macro greet(name) %}Hi{% endmacro %}\n', encoding="utf-8")
+            (work / "flow.mmd").write_text("classDiagram\n    class Engine\n", encoding="utf-8")
+            (work / "notes.md").write_text("# no mermaid\n", encoding="utf-8")
+            (work / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
+            engine.cmd_map(work)
+            data = json.loads((work / ".agent-context.json").read_text(encoding="utf-8"))
+            self.assertIn("tpl.j2", data["files"])
+            self.assertIn("flow.mmd", data["files"])
+            self.assertNotIn("notes.md", data["files"])
+            self.assertIn("Dockerfile", data["files"])
+            self.assertTrue(any(f["name"] == "greet" for f in data["files"]["tpl.j2"]["functions"]))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def test_graphql_proto_vue(self):
+        gql = engine.parse_generic_file("type User { id: ID }\nquery GetUser {\n  user { id }\n}\n", "graphql")
+        self.assertTrue(any(c["name"] == "User" for c in gql["classes"]))
+        self.assertTrue(any(f["name"] == "GetUser" for f in gql["functions"]))
+        proto = engine.parse_generic_file('service Greeter { rpc SayHello (HelloRequest) returns (HelloReply); }\n', "proto")
+        self.assertTrue(any(c["name"] == "Greeter" for c in proto["classes"]))
+        self.assertTrue(any(f["name"] == "SayHello" for f in proto["functions"]))
+        vue = engine.parse_vue_svelte_file(
+            "<script>export function save() {}\n</script>\nexport default { name: 'SaveForm' }\n"
+        )
+        self.assertTrue(any(f["name"] == "save" for f in vue["functions"]))
+        self.assertTrue(any(c["name"] == "SaveForm" for c in vue["classes"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -99,6 +99,48 @@ Or run the deployment scripts:
   }
   ```
 
+#### VS Code (GitHub Copilot MCP)
+- **Config Path**: `%APPDATA%\Code\User\mcp.json` (macOS: `~/Library/Application Support/Code/User/mcp.json`)
+- **Format** (note: the collection key is `servers`, not `mcpServers`):
+  ```json
+  {
+    "servers": {
+      "agent-context-engine": {
+        "type": "stdio",
+        "command": "python",
+        "args": ["-u", "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"]
+      }
+    }
+  }
+  ```
+
+#### Claude Code (user scope)
+- **Config Path**: `~/.claude.json` top-level `mcpServers`. Per-repo `projects.*.mcpServers` is left untouched.
+- **Format**:
+  ```json
+  {
+    "mcpServers": {
+      "agent-context-engine": {
+        "type": "stdio",
+        "command": "python",
+        "args": ["-u", "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"]
+      }
+    }
+  }
+  ```
+
+#### Codex
+- **Config Path**: `~/.codex/config.toml`
+- **Format**:
+  ```toml
+  [mcp_servers.agent-context-engine]
+  command = "python"
+  args = ["-u", "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"]
+  ```
+
+#### Antigravity IDE (live config)
+Antigravity also reads `~/.gemini/antigravity/mcp_config.json` (same `mcpServers` shape as `~/.gemini/config/mcp_config.json`). `ctx mcp --install` writes both.
+
 ---
 
 ## 3. Behavioral Rules Injection

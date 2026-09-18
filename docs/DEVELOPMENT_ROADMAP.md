@@ -24,7 +24,7 @@ Any future extension must uphold these three non-negotiable invariants:
   - `ctx_slice(file_path: string, start_line: number, end_line: number)`: Returns line-numbered slices.
   - `ctx_check(workspace_path?: string, check_all?: boolean)`: Runs native compilers and returns pass/fail diagnostics.
   - `ctx_get_graph(workspace_path?: string)`: Returns dependency topologies, circular cycle alerts, and topological sort orders.
-- **Transport**: Standard I/O (stdio) JSON-RPC 2.0 compliant with MCP `2025-06-18` (also `2025-03-26` / `2024-11-05`). stdout is JSON-RPC only; diagnostics go to stderr.
+- **Transport**: Standard I/O (stdio) JSON-RPC 2.0. Dual-era: legacy `initialize` (`2024-11-05` … `2025-11-25`) and modern `server/discover` (`2026-07-28`). stdout is JSON-RPC only; diagnostics go to stderr.
 - **CLI Subcommand**: `ctx mcp` (starts stdio server) and `ctx mcp --install` (auto-registers with AI editors).
 
 ### [COMPLETED] Phase 2: Expanded Polyglot Structural Parsing
@@ -60,10 +60,13 @@ Any future extension must uphold these three non-negotiable invariants:
 *Status: Production Ready | Implemented in `src/mcp_server.py`, `scripts/deploy.ps1`, `scripts/deploy.sh`*
 
 - **Supported Tools**:
-  - Antigravity IDE: `~/.gemini/config/mcp_config.json`
-  - Claude Desktop: `%APPDATA%\Claude\claude_desktop_config.json` (Windows/macOS/Linux)
+  - Antigravity / Gemini: `~/.gemini/config/mcp_config.json` **and** `~/.gemini/antigravity/mcp_config.json`
+  - Claude Desktop: `%APPDATA%\Claude\claude_desktop_config.json`
   - Cursor: `~/.cursor/mcp.json`
-  - OpenCode: `~/.config/opencode/opencode.jsonc` (using official `opencode.ai` schema)
+  - VS Code Copilot: `%APPDATA%\Code\User\mcp.json` (`servers` key, `type: stdio`)
+  - Claude Code: `~/.claude.json` top-level `mcpServers` (user scope; project entries left intact)
+  - OpenCode: `~/.config/opencode/opencode.jsonc`
+  - Codex: `~/.codex/config.toml` (`[mcp_servers.agent-context-engine]`)
 - **Synchronization Command**: `ctx mcp --install` or `scripts/deploy.ps1` / `scripts/deploy.sh`.
 
 ### [COMPLETED] Phase 6: Stdio Integrity & Safe Workspace Bounds (v1.2.0)
@@ -75,17 +78,28 @@ Any future extension must uphold these three non-negotiable invariants:
 - `ctx mcp --install` will not clobber an existing invalid editor config.
 - MCP tool results strip ANSI; numeric tool arguments accept JSON strings.
 
+### [COMPLETED] Phase 7: Dual-Era MCP + Full Local-Agent Coverage (v1.3.0)
+*Status: Production Ready | `src/mcp_server.py`, `tests/test_mcp_server.py`, `docs/AGENT_MEMORY.md`*
+
+- Implement MCP `2026-07-28` `server/discover` while keeping `initialize` / `ping` for Cursor and other 2025 clients.
+- `tools/list` and tool results include `resultType` (`complete`); discover advertises `supportedVersions`, `ttlMs`, `cacheScope`.
+- Installer coverage: VS Code / Insiders (`servers`), Claude Code user-scope (`~/.claude.json`), Codex (`config.toml`), Antigravity IDE (`~/.gemini/antigravity/mcp_config.json`).
+- OpenCode empty-string keys stripped; Codex TOML upsert does not truncate on `args = [...]`.
+- Durable agent memory: `AGENTS.md`, `.cursor/rules/*.mdc`, `docs/AGENT_MEMORY.md`.
+- Industry language map: Jinja2/Nunjucks/Liquid, Mermaid (+ Markdown fences), GAS service hooks, SQL, Terraform, GraphQL, Protobuf, Vue/Svelte, shell, Dockerfile, Make, Lua, Dart, R, Solidity.
+
 ---
 
 ## 3. Contribution & Architecture Guidelines
 
 When adding structural pattern detection for a new language:
 
-1. **Add Extension to `LANGUAGE_MAP` in `src/engine.py`**:
+1. **Add Extension to `LANGUAGE_MAP` or `language_for_path` in `src/engine.py`**:
    ```python
    LANGUAGE_MAP[".kt"] = "kotlin"
    ```
-2. **Implement Parser Function**:
+   Extensionless files (`Dockerfile`, `Makefile`) belong in `language_for_path`, not a fake suffix.
+2. **Implement Parser Function** (or a `_GENERIC_LANGS` branch) and register it in `parse_file_content`.
    - Must return a dictionary matching schema:
      ```python
      {
@@ -94,7 +108,7 @@ When adding structural pattern detection for a new language:
          "hooks": list[str]
      }
      ```
-3. **Register Compiler in `cmd_check`**:
+3. **Register a compiler in `cmd_check` only if a local binary can actually parse the file.** Otherwise leave `[SKIP]`. Never fake `[PASS]`.
    - Use host's native command if present (e.g. `kotlinc`, `javac`, `rustc`).
    - Gracefully fall back if binary is not installed on the system.
 4. **Add Unit Tests in `tests/test_engine.py`**:

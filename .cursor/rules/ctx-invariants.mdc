@@ -1,0 +1,17 @@
+---
+description: Non-negotiable Agent Context Engine invariants for every session
+alwaysApply: true
+---
+
+# ctx invariants
+
+Read `docs/AGENT_MEMORY.md` and `AGENTS.md` before editing protocol, installer, or parsers.
+
+- Stdlib-only Python 3.8+. No pip. No Streamable HTTP / SSE / OAuth for this server.
+- `ctx mcp` stdout is newline-delimited JSON-RPC. Banners and `print()` go to stderr (`sys.stdout = sys.stderr` in `run_stdio_server`).
+- Dual-era MCP: keep `initialize` and `ping` (Cursor / 2025 clients). MUST implement `server/discover` (MCP 2026-07-28).
+- MCP tools always take absolute `workspace_path`. Roots are deprecated; CWD is not the repo.
+- Slice cap 150. `ctx check` uses `[SKIP]` not fake `[PASS]`. Map/check refuse `$HOME` and drive roots.
+- Installer merges configs. VS Code key is `servers`. Claude Code user scope is `~/.claude.json` top-level `mcpServers` — never wipe `projects`. Codex is TOML table upsert, not `[^\[]*` body scans.
+- Cursor loads `~/.agent-context-engine/mcp_server.py`, not the git tree. Redeploy after `src/` changes.
+- After code edits: `ctx check`, then `python -m unittest discover -s tests`.

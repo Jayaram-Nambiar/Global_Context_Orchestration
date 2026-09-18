@@ -2,12 +2,14 @@
 """
 Agent Context Engine - Model Context Protocol (MCP) Server
 Pure Python standard library implementation of JSON-RPC 2.0 stdio MCP server.
-Zero external dependencies. Compliant with MCP 2025-06-18 (also 2025-03-26, 2024-11-05).
+Zero external dependencies. Dual-era MCP: legacy initialize (2024-11-05 through
+2025-11-25) plus modern server/discover (2026-07-28). Stdio JSON-RPC 2.0 only.
 """
 
 import io
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -19,8 +21,15 @@ if str(CURRENT_DIR) not in sys.path:
 
 import engine
 
-# Newest first. If the client requests a version in this tuple, echo it (spec MUST).
-SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+# Newest first. If initialize requests a version in this tuple, echo it (spec MUST).
+# 2026-07-28 clients use server/discover instead of initialize; keep initialize for Cursor.
+SUPPORTED_PROTOCOL_VERSIONS = (
+    "2026-07-28",
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+)
 LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
 PROTOCOL_VERSION = LATEST_PROTOCOL_VERSION
 SERVER_NAME = "agent-context-engine"
@@ -160,7 +169,10 @@ def _as_bool(value, default=False):
 
 
 def _tool_text(req_id, text, is_error=False):
-    result = {"content": [{"type": "text", "text": text or ""}]}
+    result = {
+        "content": [{"type": "text", "text": text or ""}],
+        "resultType": "complete",
+    }
     if is_error:
         result["isError"] = True
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
@@ -195,16 +207,24 @@ class MCPServer:
         if req_id is None:
             return None
 
-        # Route methods
+        # Route methods. Dual-era: keep initialize/ping for 2025 clients; MUST implement
+        # server/discover for MCP 2026-07-28. tools/list is a CacheableResult.
         if method == "initialize":
             return self._handle_initialize(req_id, params)
+        elif method == "server/discover":
+            return self._handle_discover(req_id)
         elif method == "ping":
             return {"jsonrpc": "2.0", "id": req_id, "result": {}}
         elif method == "tools/list":
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {"tools": TOOLS}
+                "result": {
+                    "tools": TOOLS,
+                    "resultType": "complete",
+                    "ttlMs": 60000,
+                    "cacheScope": "public",
+                },
             }
         elif method == "tools/call":
             return self._handle_tool_call(req_id, params)
@@ -217,6 +237,28 @@ class MCPServer:
                     "message": f"Method '{method}' not found"
                 }
             }
+
+    def _handle_discover(self, req_id):
+        """MCP 2026-07-28 server/discover. Independent of initialize."""
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "resultType": "complete",
+                "supportedVersions": list(SUPPORTED_PROTOCOL_VERSIONS),
+                "capabilities": {"tools": {"listChanged": False}},
+                "instructions": SERVER_INSTRUCTIONS,
+                "ttlMs": 300000,
+                "cacheScope": "public",
+                "_meta": {
+                    "io.modelcontextprotocol/serverInfo": {
+                        "name": SERVER_NAME,
+                        "title": "Agent Context Engine",
+                        "version": SERVER_VERSION,
+                    }
+                },
+            },
+        }
 
     def _handle_initialize(self, req_id, params):
         requested = params.get("protocolVersion")
@@ -325,14 +367,33 @@ class MCPServer:
             return _tool_text(req_id, f"Execution error: {e}", is_error=True)
 
 
+def _upsert_toml_table(text, header, block):
+    """Replace or append one TOML table. Matches `^[header]` line starts only.
+
+    Do not use a `[^\[]*` scan of the table body: `args = ["-u", ...]` contains
+    `[` and would truncate the replacement.
+    """
+    start_re = re.compile(r"(?m)^\[%s\][ \t]*\r?\n" % re.escape(header))
+    next_table = re.compile(r"(?m)^\[")
+    new_block = block.rstrip() + "\n"
+    match = start_re.search(text or "")
+    if not match:
+        base = text or ""
+        if base and not base.endswith("\n"):
+            base += "\n"
+        if base:
+            base += "\n"
+        return base + new_block
+    rest = text[match.end():]
+    nxt = next_table.search(rest)
+    end = match.end() + nxt.start() if nxt else len(text)
+    return text[:match.start()] + new_block + text[end:]
+
+
 def configure_editors(engine_dir: Path = None) -> dict:
     """
-    Idempotently configures and registers the Agent Context Engine MCP server
-    across all detected editor environments:
-    - Antigravity: ~/.gemini/config/mcp_config.json
-    - Claude Desktop: %APPDATA%/Claude/claude_desktop_config.json
-    - Cursor: ~/.cursor/mcp.json
-    - OpenCode: ~/.config/opencode/opencode.jsonc
+    Idempotently registers the Agent Context Engine MCP stdio server in detected
+    editor configs. Merge-only: never wipe sibling servers or rewrite invalid JSON.
     """
     if engine_dir is None:
         installed_mcp = Path.home() / ".agent-context-engine" / "mcp_server.py"
@@ -370,15 +431,25 @@ def configure_editors(engine_dir: Path = None) -> dict:
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-    def _configure_mcp_servers(file_path: Path, require_parent: bool = False) -> dict:
+    def _drop_empty_keys(obj):
+        if not isinstance(obj, dict):
+            return obj
+        obj.pop("", None)
+        return obj
+
+    def _configure_named(file_path, collection_key, entry, require_parent=False, require_file=False):
+        if require_file and not file_path.is_file():
+            return {"path": str(file_path), "status": "skipped (not installed)"}
         if require_parent and not file_path.exists() and not file_path.parent.exists():
             return {"path": str(file_path), "status": "skipped (not installed)"}
         data = _load_json_file(file_path)
         if data is None:
             return {"path": str(file_path), "status": "skipped (invalid existing config)"}
-        if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
-            data["mcpServers"] = {}
-        data["mcpServers"]["agent-context-engine"] = mcp_def_standard
+        _drop_empty_keys(data)
+        if collection_key not in data or not isinstance(data[collection_key], dict):
+            data[collection_key] = {}
+        _drop_empty_keys(data[collection_key])
+        data[collection_key]["agent-context-engine"] = entry
         _write_json_file(file_path, data)
         return {"path": str(file_path), "status": "configured"}
 
@@ -386,28 +457,55 @@ def configure_editors(engine_dir: Path = None) -> dict:
         "command": sys.executable,
         "args": ["-u", str(server_target)]
     }
+    mcp_def_typed = {
+        "type": "stdio",
+        "command": sys.executable,
+        "args": ["-u", str(server_target)]
+    }
 
-    # 1. Antigravity
-    gemini_mcp = Path.home() / ".gemini" / "config" / "mcp_config.json"
-    results["antigravity"] = _configure_mcp_servers(gemini_mcp)
-
-    # 2. Claude Desktop
+    home = Path.home()
     if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
-        claude_path = Path(appdata) / "Claude" / "claude_desktop_config.json"
+        appdata = os.environ.get("APPDATA", str(home / "AppData" / "Roaming"))
+        claude_desktop = Path(appdata) / "Claude" / "claude_desktop_config.json"
+        vscode_mcp = Path(appdata) / "Code" / "User" / "mcp.json"
+        vscode_insiders_mcp = Path(appdata) / "Code - Insiders" / "User" / "mcp.json"
     elif sys.platform == "darwin":
-        claude_path = Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        claude_desktop = home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        vscode_mcp = home / "Library" / "Application Support" / "Code" / "User" / "mcp.json"
+        vscode_insiders_mcp = home / "Library" / "Application Support" / "Code - Insiders" / "User" / "mcp.json"
     else:
-        claude_path = Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
+        claude_desktop = home / ".config" / "Claude" / "claude_desktop_config.json"
+        vscode_mcp = home / ".config" / "Code" / "User" / "mcp.json"
+        vscode_insiders_mcp = home / ".config" / "Code - Insiders" / "User" / "mcp.json"
 
-    results["claude"] = _configure_mcp_servers(claude_path, require_parent=True)
+    results["antigravity"] = _configure_named(
+        home / ".gemini" / "config" / "mcp_config.json", "mcpServers", mcp_def_standard
+    )
+    results["antigravity_ide"] = _configure_named(
+        home / ".gemini" / "antigravity" / "mcp_config.json",
+        "mcpServers",
+        mcp_def_standard,
+        require_parent=True,
+    )
+    results["claude"] = _configure_named(
+        claude_desktop, "mcpServers", mcp_def_standard, require_parent=True
+    )
+    results["cursor"] = _configure_named(
+        home / ".cursor" / "mcp.json", "mcpServers", mcp_def_standard
+    )
+    results["vscode"] = _configure_named(
+        vscode_mcp, "servers", mcp_def_typed, require_parent=True
+    )
+    results["vscode_insiders"] = _configure_named(
+        vscode_insiders_mcp, "servers", mcp_def_typed, require_parent=True
+    )
+    # Claude Code user-scope lives at ~/.claude.json. Never create this file;
+    # never touch projects.*.mcpServers (those are per-repo).
+    results["claude_code"] = _configure_named(
+        home / ".claude.json", "mcpServers", mcp_def_typed, require_file=True
+    )
 
-    # 3. Cursor
-    cursor_mcp = Path.home() / ".cursor" / "mcp.json"
-    results["cursor"] = _configure_mcp_servers(cursor_mcp)
-
-    # 4. OpenCode
-    opencode_dir = Path.home() / ".config" / "opencode"
+    opencode_dir = home / ".config" / "opencode"
     opencode_file = opencode_dir / "opencode.jsonc"
     if not opencode_file.exists() and (opencode_dir / "opencode.json").exists():
         opencode_file = opencode_dir / "opencode.json"
@@ -417,8 +515,10 @@ def configure_editors(engine_dir: Path = None) -> dict:
         if data is None:
             results["opencode"] = {"path": str(opencode_file), "status": "skipped (invalid existing config)"}
         else:
+            _drop_empty_keys(data)
             if "mcp" not in data or not isinstance(data["mcp"], dict):
                 data["mcp"] = {}
+            _drop_empty_keys(data["mcp"])
             data["mcp"]["agent-context-engine"] = {
                 "type": "local",
                 "command": [sys.executable, "-u", str(server_target)],
@@ -429,7 +529,38 @@ def configure_editors(engine_dir: Path = None) -> dict:
     else:
         results["opencode"] = {"path": str(opencode_file), "status": "skipped (not installed)"}
 
+    codex_dir = home / ".codex"
+    codex_file = codex_dir / "config.toml"
+    if not codex_dir.exists():
+        results["codex"] = {"path": str(codex_file), "status": "skipped (not installed)"}
+    else:
+        existing = ""
+        if codex_file.is_file():
+            existing = codex_file.read_text(encoding="utf-8")
+        block = (
+            "[mcp_servers.agent-context-engine]\n"
+            "command = %s\n"
+            "args = %s\n"
+        ) % (json.dumps(sys.executable), json.dumps(["-u", str(server_target)]))
+        updated = _upsert_toml_table(existing, "mcp_servers.agent-context-engine", block)
+        codex_file.parent.mkdir(parents=True, exist_ok=True)
+        codex_file.write_text(updated, encoding="utf-8")
+        results["codex"] = {"path": str(codex_file), "status": "configured"}
+
     return results
+
+
+_EDITOR_LABELS = {
+    "antigravity": "Antigravity",
+    "antigravity_ide": "Antigravity IDE",
+    "claude": "Claude Desktop",
+    "cursor": "Cursor",
+    "vscode": "VS Code",
+    "vscode_insiders": "VS Code Insiders",
+    "claude_code": "Claude Code",
+    "opencode": "OpenCode",
+    "codex": "Codex",
+}
 
 
 def cmd_install_mcp(engine_dir: Path = None) -> int:
@@ -439,10 +570,11 @@ def cmd_install_mcp(engine_dir: Path = None) -> int:
     for editor, info in results.items():
         status = info["status"]
         path = info["path"]
+        label = _EDITOR_LABELS.get(editor, editor)
         if status == "configured":
-            print(f"  \033[1;32m[+] {editor.capitalize():12}\033[0m -> {path}")
+            print("  \033[1;32m[+]\033[0m %-18s -> %s" % (label, path))
         else:
-            print(f"  \033[1;30m[-] {editor.capitalize():12}\033[0m -> {status}")
+            print("  \033[1;30m[-]\033[0m %-18s -> %s" % (label, status))
     print("\033[1;32m[+] MCP configuration synchronized successfully.\033[0m\n")
     return 0
 
@@ -450,9 +582,9 @@ def cmd_install_mcp(engine_dir: Path = None) -> int:
 def run_stdio_server():
     """Runs the MCP server over standard input/output.
 
-    MCP stdio (2025-06-18): stdout is reserved for newline-delimited JSON-RPC.
-    Diagnostic / CLI banners MUST go to stderr. The server MUST NOT write
-    anything else to stdout.
+    MCP stdio (all protocol years): stdout is reserved for newline-delimited
+    JSON-RPC. Diagnostic / CLI banners MUST go to stderr. The server MUST NOT
+    write anything else to stdout.
     """
     server = MCPServer()
 

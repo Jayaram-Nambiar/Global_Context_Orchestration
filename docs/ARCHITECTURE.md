@@ -81,6 +81,11 @@ To avoid requiring a heavy Node runtime or external Babel/TypeScript dependencie
 - Captures `Class`, `Sub`, and `Function` signatures.
 - Cross-boundary hooks: `WScript.Shell` invocations, `MSXML2.ServerXMLHTTP`, and `WinHttp.WinHttpRequest`.
 
+### 3.5 Templates, diagrams, and industry formats
+Regex extractors (same return schema as other parsers) cover Jinja2/Nunjucks/Liquid, Mermaid (including Markdown fences), SQL, Terraform HCL, GraphQL, Protobuf, Vue/Svelte `<script>` blocks, POSIX shell, Dockerfiles, and Makefiles. Google Apps Script (`.gs`) reuses the JS parser and records `SpreadsheetApp` / `google.script.run` hooks. Markdown files with no mermaid fence are not written into the map.
+
+`language_for_path` maps extensionless names (`Dockerfile`, `Makefile`) in addition to `LANGUAGE_MAP` suffixes. `parse_file_content` is the single dispatch used by `ctx map`. Uncheckable types still print `[SKIP]` in `ctx check`.
+
 ---
 
 ## 4. Native Syntax Interception Engine (`ctx check`)
@@ -118,7 +123,18 @@ Each checker subprocess has a 20-second timeout. `ctx map` / `ctx check` refuse 
 
 ---
 
-## 5. File Exclusions & Performance Optimization
+## 5. Dual-era MCP transport (`src/mcp_server.py`)
+
+The server is **stdio JSON-RPC only**. It speaks two client generations:
+
+- **Legacy (Cursor, Claude Desktop, 2024-11-05 … 2025-11-25):** `initialize` negotiates `protocolVersion`, `ping` remains, `tools/list` + `tools/call`.
+- **Modern (MCP 2026-07-28):** clients MAY skip `initialize` and call `server/discover`. Discover results include `resultType`, `supportedVersions`, `ttlMs`, and `cacheScope`. Identity lives in `_meta.io.modelcontextprotocol/serverInfo`.
+
+Stdout isolation (`sys.stdout = sys.stderr`, RPC on the original stdout) is a correctness requirement, not a style choice. See `docs/AGENT_MEMORY.md`.
+
+---
+
+## 6. File Exclusions & Performance Optimization
 
 To prevent scanning vendor dependencies and binary files, the engine enforces strict in-place pruning:
 - **Ignored Directories**: `node_modules`, `.git`, `__pycache__`, `venv`, `.venv`, `dist`, `build`, `target`, `bin`, `obj`, `.next`, `.turbo`, `.gemini`, `.cursor`, `.vscode`.

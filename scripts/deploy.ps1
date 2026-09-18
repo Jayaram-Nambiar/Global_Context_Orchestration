@@ -3,8 +3,8 @@
     Deploys the Agent Context Engine globally to the host machine.
 .DESCRIPTION
     Installs engine.py, mcp_server.py, and shell launchers into ~/.agent-context-engine,
-    creates PATH shims, configures the MCP server across Antigravity, Cursor, Claude,
-    and OpenCode, and verifies/injects behavioral rulesets.
+    creates PATH shims, configures the MCP server across Cursor, VS Code, Claude Desktop,
+    Claude Code, Antigravity, OpenCode, and Codex, and verifies/injects behavioral rulesets.
 #>
 
 [CmdletBinding()]

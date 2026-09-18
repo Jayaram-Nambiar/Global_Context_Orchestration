@@ -96,3 +96,15 @@ Include the following directive block in any system prompt, custom instruction s
 - Never read files >150 lines in full; use `ctx slice <file> <start> <end>` for targeted inspection.
 - Always run `ctx check` after modifying code to catch and fix syntax errors locally before responding.
 ```
+
+---
+
+## 5. Durable repo memory
+
+Before changing MCP protocol, editor install, or engine bounds, read:
+
+- `docs/AGENT_MEMORY.md` — hard-won failure modes (stdout isolation, dual-era `server/discover`, VS Code `servers` vs `mcpServers`, Claude Code `~/.claude.json`)
+- `AGENTS.md` — loop + constraints for this repository
+- Official spec: [MCP 2026-07-28 key changes](https://modelcontextprotocol.io/specification/2026-07-28/changelog)
+
+When you learn a new invariant, **append a dated entry to `docs/AGENT_MEMORY.md`**. Do not rely on chat transcripts.

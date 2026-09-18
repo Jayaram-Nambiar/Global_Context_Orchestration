@@ -1,7 +1,7 @@
 # Agent Context Engine (`ctx`)
 
-[![Tests](https://img.shields.io/badge/tests-51%20passed-brightgreen.svg)](#automated-testing)
-[![MCP-Protocol](https://img.shields.io/badge/MCP-2025--06--18%20compliant-blueviolet.svg)](#model-context-protocol-mcp-integration)
+[![Tests](https://img.shields.io/badge/tests-61%20passed-brightgreen.svg)](#automated-testing)
+[![MCP-Protocol](https://img.shields.io/badge/MCP-2026--07--28%20dual--era-blueviolet.svg)](#model-context-protocol-mcp-integration)
 [![Zero-Cloud](https://img.shields.io/badge/cloud-zero%20external%20services-blue.svg)](#design-principles)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero%20external%20pkgs-success.svg)](#design-principles)
 [![Token-Reduction](https://img.shields.io/badge/tokens-90%25%2B%20reduction-orange.svg)](#token-economics)
@@ -63,7 +63,7 @@ Traditional AI coding workflows suffer from two primary failure modes:
 ## Features
 
 - **Zero Cloud & Zero Third-Party Dependencies**: Runs strictly on standard library Python and native host binaries. Zero vector databases, zero pip installs, zero cloud dependencies.
-- **Model Context Protocol (MCP) Server (`ctx mcp`)**: Pure Python stdio JSON-RPC 2.0 server complying with MCP `2025-06-18` (also `2025-03-26` / `2024-11-05`) exposing tools: `ctx_get_map`, `ctx_query_symbol`, `ctx_slice`, `ctx_check`, `ctx_get_graph`. Stdio stdout is reserved for JSON-RPC; CLI diagnostics go to stderr.
+- **Model Context Protocol (MCP) Server (`ctx mcp`)**: Pure Python stdio JSON-RPC 2.0 server. Dual-era: legacy `initialize` (`2024-11-05` … `2025-11-25`) and modern `server/discover` (`2026-07-28`). Tools: `ctx_get_map`, `ctx_query_symbol`, `ctx_slice`, `ctx_check`, `ctx_get_graph`. Stdio stdout is reserved for JSON-RPC; CLI diagnostics go to stderr.
 - **Architectural Dependency Graphs & Cycle Detection (`ctx graph`)**:
   - Resolves internal relative imports across all supported languages.
   - Detects circular dependency cycles using 3-color Depth-First Search.
@@ -71,7 +71,20 @@ Traditional AI coding workflows suffer from two primary failure modes:
   - Performs Kahn's algorithm topological sorting to output the optimal file edit order (dependency prerequisites first).
 - **Polyglot Structural Pattern Extraction**:
   - **Python (`.py`)**: Full AST traversal for classes, methods, inheritance, function arguments, async signatures, module constants, and cross-boundary network/process hooks (`subprocess`, `requests`, `os.system`, `httpx`).
-  - **JavaScript / TypeScript / Google Apps Script (`.js`, `.ts`, `.gs`, `.jsx`, `.tsx`)**: Declarations, arrow functions, classes, and hooks (`fetch`, `axios`, `UrlFetchApp`, `child_process`).
+  - **JavaScript / TypeScript / Google Apps Script (`.js`, `.ts`, `.gs`, `.jsx`, `.tsx`)**: Declarations, arrow functions, classes, and hooks (`fetch`, `axios`, `UrlFetchApp`, `SpreadsheetApp`, `google.script.run`, `child_process`).
+  - **Jinja2 / Nunjucks / Liquid (`.j2`, `.jinja`, `.jinja2`, `.njk`, `.liquid`)**: Macros, blocks, `extends`/`include`, and template network hooks.
+  - **Mermaid (`.mmd`, `.mermaid`, and ` ```mermaid ` fences in Markdown)**: Diagram kinds, participants, classes, subgraphs. Markdown files without mermaid fences are not indexed.
+  - **PowerShell (`.ps1`, `.psm1`)**: Cmdlet functions, filters, and invocations (`Invoke-RestMethod`, `Invoke-WebRequest`, `Start-Process`).
+  - **VBScript / WScript (`.vbs`)**: Subroutines, functions, classes, and COM automation (`WScript.Shell`, `MSXML2.ServerXMLHTTP`).
+  - **Kotlin (`.kt`, `.kts`)**: Classes, objects, interfaces, fun declarations, and network hooks (`ktor`, `okhttp3`).
+  - **Swift (`.swift`)**: Classes, structs, protocols, functions, and hooks (`URLSession`, `Process`).
+  - **C / C++ (`.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`)**: Classes, structs, functions, and hooks (`socket`, `curl`, `popen`, `fork`).
+  - **Ruby (`.rb`, `.rake`)**: Classes, modules, defs, and hooks (`Net::HTTP`, `Open3`, `system`).
+  - **PHP (`.php`)**: Classes, interfaces, traits, functions, and hooks (`curl_init`, `exec`, `shell_exec`).
+  - **Scala (`.scala`, `.sc`)**: Classes, traits, objects, defs, and hooks (`Http`, `Process`).
+  - **Elixir (`.ex`, `.exs`)**: Modules, defs, defps, and hooks (`HTTPoison`, `System`, `Port`).
+  - **Go, Rust, C#, Java, Lua, Dart, R, Solidity**: Structs, contracts, interfaces, and function signatures.
+  - **SQL, Terraform/HCL, GraphQL, Protobuf, Vue/Svelte, Shell, Dockerfile, Make**: Schema objects, IaC blocks, SFC scripts, and container/Make targets.
   - **PowerShell (`.ps1`, `.psm1`)**: Cmdlet functions, filters, and invocations (`Invoke-RestMethod`, `Invoke-WebRequest`, `Start-Process`).
   - **VBScript / WScript (`.vbs`)**: Subroutines, functions, classes, and COM automation (`WScript.Shell`, `MSXML2.ServerXMLHTTP`).
   - **Kotlin (`.kt`, `.kts`)**: Classes, objects, interfaces, fun declarations, and network hooks (`ktor`, `okhttp3`).
@@ -105,7 +118,7 @@ bash scripts/deploy.sh
 This installs:
 - Master engine into `~/.agent-context-engine/engine.py` and `mcp_server.py`.
 - Global launchers (`ctx.cmd`, `ctx.ps1`, `ctx`) in PATH and Scoop shims.
-- Configures the MCP server across **Antigravity**, **Claude Desktop**, **Cursor**, and **OpenCode**.
+- Configures the MCP server across **Cursor**, **VS Code**, **Claude Desktop**, **Claude Code**, **Antigravity**, **OpenCode**, and **Codex**.
 - Injects surgical token optimization rules into global profiles.
 
 ### 2. Basic CLI Usage
@@ -192,10 +205,13 @@ Global_Context_Orchestration/
 │   ├── test_engine.py        # Core engine, polyglot parsers, dependency graph tests
 │   ├── test_hooks.py         # Git pre-commit hook interception tests
 │   └── test_mcp_server.py    # MCP protocol handshake, tools, editor sync tests
+├── AGENTS.md                 # Loop + constraints for agents in this repo
 ├── docs/
 │   ├── ARCHITECTURE.md       # Technical design & token economics
 │   ├── AGENT_TRAINING.md     # AI agent behavioral instruction manual
+│   ├── AGENT_MEMORY.md       # Hard-won invariants for future agents
 │   ├── EDITOR_INTEGRATION.md # Cross-editor MCP & prompt injection guide
+│   ├── OPERATOR_RUNBOOK.md   # Install, operate, troubleshoot
 │   └── DEVELOPMENT_ROADMAP.md# Evolutionary roadmap & milestone log
 ├── .agent-context.json       # Minified project structural metadata
 └── README.md                 # Master project documentation
