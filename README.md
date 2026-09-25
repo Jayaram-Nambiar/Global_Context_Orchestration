@@ -1,225 +1,271 @@
 # Agent Context Engine (`ctx`)
 
-[![Tests](https://img.shields.io/badge/tests-61%20passed-brightgreen.svg)](#automated-testing)
-[![MCP-Protocol](https://img.shields.io/badge/MCP-2026--07--28%20dual--era-blueviolet.svg)](#model-context-protocol-mcp-integration)
-[![Zero-Cloud](https://img.shields.io/badge/cloud-zero%20external%20services-blue.svg)](#design-principles)
-[![Dependencies](https://img.shields.io/badge/dependencies-zero%20external%20pkgs-success.svg)](#design-principles)
-[![Token-Reduction](https://img.shields.io/badge/tokens-90%25%2B%20reduction-orange.svg)](#token-economics)
+Local command-line tool and [Model Context Protocol](https://modelcontextprotocol.io/) server. It builds a small structural index of a repository so an coding agent can find symbols, read a line range, and check syntax without loading whole files.
 
-**Agent Context Engine (`ctx`)** is a lightweight, local-first developer experience (DX), dependency topology, and LLM token optimization engine. It eliminates context bloat, reduces token consumption by **80–94%**, and intercepts code syntax regressions before LLMs return to user chat loops across **Antigravity**, **Claude Desktop / Claude Code**, **Cursor**, and **OpenCode**.
+The project is [MIT licensed](LICENSE). You may use, modify, and redistribute it with no further restrictions beyond keeping the copyright notice and this license text with copies or substantial portions of the software.
 
----
+Current release: **1.3.0**. Python **3.8+**. Standard library only. No pip packages and no network service.
 
-## The Problem: Context Bloat & Hallucination Loops
+## What you get
 
-Traditional AI coding workflows suffer from two primary failure modes:
-1. **Context Window Exhaustion**: Agents dump hundreds or thousands of lines of raw source code into context just to understand high-level symbol relationships, imports, or signatures. This triggers model context degradation, lost-in-the-middle phenomena, and runaway API token costs.
-2. **Post-Edit Hallucination Loops**: After modifying code, agents report task completion without verifying syntax locally. If a subtle syntax error was introduced (e.g., mismatched brackets, improper indentation), the user must copy-paste the error back to the LLM, triggering an expensive apologetic loop.
+| Command | What it does |
+| :--- | :--- |
+| `ctx map [dir]` | Writes `.agent-context.json` for that directory. Refuses `$HOME` and a filesystem root. Stops at 8,000 files. |
+| `ctx query <symbol> [dir]` | Finds classes, methods, functions, and hooks in the index. |
+| `ctx slice <file> <start> <end>` | Prints a line-numbered range, clamped to 150 lines. |
+| `ctx graph [dir]` | Lists entry points, import cycles, and a topological edit order. |
+| `ctx check [dir] [--all]` | Runs a local syntax check. Files with no checker are `[SKIP]`, not `[PASS]`. |
+| `ctx mcp` | Speaks JSON-RPC on stdin/stdout. |
+| `ctx mcp --install` | Merges the server into installed editor configs. |
+| `ctx --version` | Prints `ctx` and the version. |
 
----
+`ctx map` stores the absolute workspace path in `.agent-context.json` because MCP clients must pass that path back as `workspace_path`. That file is gitignored. Do not commit it.
 
-## The Solution: Structural Metadata Indexing, Topologies & MCP
+Supported editors for `ctx mcp --install`: Cursor, VS Code, Claude Desktop, Claude Code, Antigravity, OpenCode, and Codex. Protocol support is dual-era: `initialize` and `ping` for 2024–2025 clients, and `server/discover` for MCP `2026-07-28`.
 
-`ctx` introduces a lightweight, deterministic paradigm inspired by Abstract Syntax Tree (AST) analysis, architectural dependency graphs, and Model Context Protocol principles:
+## Prerequisites
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                          Target Workspace                              │
-│ (.py, .js, .ts, .kt, .swift, .cpp, .c, .rb, .php, .scala, .ex, etc.)   │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │
-                         [ ctx map / ctx graph ]
-                                    │
-                                    ▼
-       ┌─────────────────────────────────────────────────────────┐
-       │                   .agent-context.json                   │
-       │   - Class Hierarchies & Method Signatures               │
-       │   - Function Arguments & Return Signatures              │
-       │   - Cross-Boundary Hooks (Network, Process, File I/O)   │
-       │   - Dependency Graphs & Cycle Detection Alerts          │
-       │   - Recommended Topological Edit Sequence               │
-       │   (Minified, 80-94% Token Savings vs Raw Source)        │
-       └────────────────────────────┬────────────────────────────┘
-                                    │
-         ┌──────────────────────────┼──────────────────────────┐
-         ▼                          ▼                          ▼
- [ ctx query <sym> ]     [ ctx slice <file> L1 L2 ]     [ ctx graph ]
- (Symbol Location)       (Line-Bounded Read)            (Topology Plan)
-         │                          │                          │
-         └──────────────────────────┴──────────────────────────┘
-                                    │ Agent Performs Edits
-                                    ▼
-                             [ ctx check ]
-                   (Native Local Syntax Validation)
-                                    │
-                  ┌─────────────────┴─────────────────┐
-                  ▼                                   ▼
-            [PASS: Exit 0]                      [FAIL: Exit 1]
-         Proceed to Completion              Intercept Error Locally
-```
+Install Python 3.8 or newer and confirm it is on `PATH`. Git is optional; it is used by `ctx check` (changed files) and by the pre-commit hook.
 
----
-
-## Features
-
-- **Zero Cloud & Zero Third-Party Dependencies**: Runs strictly on standard library Python and native host binaries. Zero vector databases, zero pip installs, zero cloud dependencies.
-- **Model Context Protocol (MCP) Server (`ctx mcp`)**: Pure Python stdio JSON-RPC 2.0 server. Dual-era: legacy `initialize` (`2024-11-05` … `2025-11-25`) and modern `server/discover` (`2026-07-28`). Tools: `ctx_get_map`, `ctx_query_symbol`, `ctx_slice`, `ctx_check`, `ctx_get_graph`. Stdio stdout is reserved for JSON-RPC; CLI diagnostics go to stderr.
-- **Architectural Dependency Graphs & Cycle Detection (`ctx graph`)**:
-  - Resolves internal relative imports across all supported languages.
-  - Detects circular dependency cycles using 3-color Depth-First Search.
-  - Highlights architectural root entry points (in-degree = 0).
-  - Performs Kahn's algorithm topological sorting to output the optimal file edit order (dependency prerequisites first).
-- **Polyglot Structural Pattern Extraction**:
-  - **Python (`.py`)**: Full AST traversal for classes, methods, inheritance, function arguments, async signatures, module constants, and cross-boundary network/process hooks (`subprocess`, `requests`, `os.system`, `httpx`).
-  - **JavaScript / TypeScript / Google Apps Script (`.js`, `.ts`, `.gs`, `.jsx`, `.tsx`)**: Declarations, arrow functions, classes, and hooks (`fetch`, `axios`, `UrlFetchApp`, `SpreadsheetApp`, `google.script.run`, `child_process`).
-  - **Jinja2 / Nunjucks / Liquid (`.j2`, `.jinja`, `.jinja2`, `.njk`, `.liquid`)**: Macros, blocks, `extends`/`include`, and template network hooks.
-  - **Mermaid (`.mmd`, `.mermaid`, and ` ```mermaid ` fences in Markdown)**: Diagram kinds, participants, classes, subgraphs. Markdown files without mermaid fences are not indexed.
-  - **PowerShell (`.ps1`, `.psm1`)**: Cmdlet functions, filters, and invocations (`Invoke-RestMethod`, `Invoke-WebRequest`, `Start-Process`).
-  - **VBScript / WScript (`.vbs`)**: Subroutines, functions, classes, and COM automation (`WScript.Shell`, `MSXML2.ServerXMLHTTP`).
-  - **Kotlin (`.kt`, `.kts`)**: Classes, objects, interfaces, fun declarations, and network hooks (`ktor`, `okhttp3`).
-  - **Swift (`.swift`)**: Classes, structs, protocols, functions, and hooks (`URLSession`, `Process`).
-  - **C / C++ (`.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`)**: Classes, structs, functions, and hooks (`socket`, `curl`, `popen`, `fork`).
-  - **Ruby (`.rb`, `.rake`)**: Classes, modules, defs, and hooks (`Net::HTTP`, `Open3`, `system`).
-  - **PHP (`.php`)**: Classes, interfaces, traits, functions, and hooks (`curl_init`, `exec`, `shell_exec`).
-  - **Scala (`.scala`, `.sc`)**: Classes, traits, objects, defs, and hooks (`Http`, `Process`).
-  - **Elixir (`.ex`, `.exs`)**: Modules, defs, defps, and hooks (`HTTPoison`, `System`, `Port`).
-  - **Go, Rust, C#, Java, Lua, Dart, R, Solidity**: Structs, contracts, interfaces, and function signatures.
-  - **SQL, Terraform/HCL, GraphQL, Protobuf, Vue/Svelte, Shell, Dockerfile, Make**: Schema objects, IaC blocks, SFC scripts, and container/Make targets.
-  - **PowerShell (`.ps1`, `.psm1`)**: Cmdlet functions, filters, and invocations (`Invoke-RestMethod`, `Invoke-WebRequest`, `Start-Process`).
-  - **VBScript / WScript (`.vbs`)**: Subroutines, functions, classes, and COM automation (`WScript.Shell`, `MSXML2.ServerXMLHTTP`).
-  - **Kotlin (`.kt`, `.kts`)**: Classes, objects, interfaces, fun declarations, and network hooks (`ktor`, `okhttp3`).
-  - **Swift (`.swift`)**: Classes, structs, protocols, functions, and hooks (`URLSession`, `Process`).
-  - **C / C++ (`.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`)**: Classes, structs, functions, and hooks (`socket`, `curl`, `popen`, `fork`).
-  - **Ruby (`.rb`, `.rake`)**: Classes, modules, defs, and hooks (`Net::HTTP`, `Open3`, `system`).
-  - **PHP (`.php`)**: Classes, interfaces, traits, functions, and hooks (`curl_init`, `exec`, `shell_exec`).
-  - **Scala (`.scala`, `.sc`)**: Classes, traits, objects, defs, and hooks (`Http`, `Process`).
-  - **Elixir (`.ex`, `.exs`)**: Modules, defs, defps, and hooks (`HTTPoison`, `System`, `Port`).
-  - **Go, Rust, C#, Java**: Structs, interfaces, and function signatures.
-- **Pre-Commit Interception**: Installs git hooks into `.git/hooks/pre-commit` via `scripts/install-hooks.ps1` or `scripts/install-hooks.sh` to block commits containing syntax errors in <25ms.
-
----
-
-## Quickstart
-
-### 1. Global Installation & Cross-Editor Synchronization
-
-From this repository, run the deployment script:
+**Windows (Command Prompt or PowerShell)**
 
 ```powershell
-# Windows
-powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1
+python --version
 ```
 
-Or on Linux / macOS:
+If `python` is missing, install from [python.org](https://www.python.org/downloads/windows/) and enable **Add python.exe to PATH**, or try `py -3 --version`.
+
+**macOS**
+
+```bash
+python3 --version
+```
+
+If it is missing: `xcode-select --install`, or install Python 3 from [python.org](https://www.python.org/downloads/macos/).
+
+**Linux**
+
+```bash
+python3 --version
+```
+
+Debian/Ubuntu: `sudo apt update && sudo apt install -y python3`. Fedora: `sudo dnf install -y python3`.
+
+## Install
+
+Clone the repository, then run the deploy script from the repository root. Paths below are relative to that root.
+
+```bash
+git clone https://github.com/Jayaram-Nambiar/Global_Context_Orchestration.git
+cd Global_Context_Orchestration
+```
+
+### Windows
+
+PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy.ps1
+```
+
+Close the terminal and open a new one so the user `PATH` update is visible. Then:
+
+```powershell
+ctx --version
+```
+
+`deploy.ps1` copies `src/engine.py` and `src/mcp_server.py` to `%USERPROFILE%\.agent-context-engine\`, writes `ctx.cmd`, `ctx.ps1`, and `ctx` there, adds that directory to the user `PATH`, and runs `ctx mcp --install`. If Scoop shims exist, it copies the Windows launchers there too.
+
+### macOS and Linux
+
 ```bash
 bash scripts/deploy.sh
 ```
 
-This installs:
-- Master engine into `~/.agent-context-engine/engine.py` and `mcp_server.py`.
-- Global launchers (`ctx.cmd`, `ctx.ps1`, `ctx`) in PATH and Scoop shims.
-- Configures the MCP server across **Cursor**, **VS Code**, **Claude Desktop**, **Claude Code**, **Antigravity**, **OpenCode**, and **Codex**.
-- Injects surgical token optimization rules into global profiles.
-
-### 2. Basic CLI Usage
+The script copies the same two Python files to `$HOME/.agent-context-engine/` and writes a `ctx` launcher in that directory. Add it to your shell profile if `ctx` is not found:
 
 ```bash
-# 1. Map current directory into minified .agent-context.json
+echo 'export PATH="$HOME/.agent-context-engine:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+On zsh, use `~/.zshrc` instead of `~/.bashrc`. Then:
+
+```bash
+ctx --version
+```
+
+### Run from the clone without installing
+
+From the repository root:
+
+```bash
+python src/engine.py --version
+```
+
+On macOS or Linux, use `python3` if `python` is not Python 3:
+
+```bash
+python3 src/engine.py map
+python3 src/engine.py query cmd_map
+python3 src/engine.py slice src/engine.py 1012 1040
+python3 src/engine.py check
+```
+
+Windows Command Prompt can also call the repo launcher:
+
+```bat
+bin\ctx.cmd map
+```
+
+PowerShell:
+
+```powershell
+.\bin\ctx.ps1 map
+```
+
+macOS and Linux:
+
+```bash
+chmod +x bin/ctx
+./bin/ctx map
+```
+
+Cursor loads the installed copy at `~/.agent-context-engine/mcp_server.py`, not this git tree. After you change `src/`, run `scripts/deploy.ps1` or `scripts/deploy.sh` again.
+
+## Use it on a project
+
+From the project you want to index (not from your home directory):
+
+```bash
 ctx map
-
-# 2. Inspect dependency topology, cycles, and edit sequence
+ctx query main
+ctx slice src/engine.py 1 40
 ctx graph
-
-# 3. Query a specific function or cross-boundary hook
-ctx query computeTotal
-
-# 4. Read only the necessary line range (e.g. lines 10 to 45)
-ctx slice src/service.py 10 45
-
-# 5. Validate syntax of all changed files before reporting completion
 ctx check
+```
 
-# 6. Auto-synchronize MCP server across all installed AI editors
+`ctx slice` swaps reversed ranges and never returns more than 150 lines. `ctx check` with no flags looks at uncommitted git changes, then recently modified files. `ctx check --all` walks the tree.
+
+### Editor connection
+
+```bash
 ctx mcp --install
 ```
 
----
+Restart the editor afterward. Manual config paths and JSON examples are in [docs/EDITOR_INTEGRATION.md](docs/EDITOR_INTEGRATION.md). The installer merges existing configs. It skips a file that is not valid JSON, and it does not wipe Claude Code `projects` entries.
 
-## CLI Reference
+## Use cases
 
-| Command | Arguments | Purpose |
-| :--- | :--- | :--- |
-| `ctx map` | `[dir]` | Scans directory and produces minified `.agent-context.json`. Refuses filesystem root and `$HOME`. Caps at 8,000 files. |
-| `ctx graph` | `[dir]` | Visualizes entry points, circular cycles, and Kahn's topological edit ordering. |
-| `ctx check` | `[dir] [--all]` | Executes native local compilation on uncommitted git changes or recently modified files. Uncheckable types are `[SKIP]`, never a fake `[PASS]`. |
-| `ctx slice` | `<file> <start> <end>` | Emits line-numbered slices, clamped to 150 lines. |
-| `ctx query` | `<symbol> [dir]` | Looks up matching classes, methods, functions, or hooks in `.agent-context.json`. |
-| `ctx mcp` | `[--install]` | Starts stdio JSON-RPC 2.0 MCP server, or auto-configures editor profiles with `--install`. |
-| `ctx --version` |  | Prints `ctx <version>`. |
+- Find the definition of a function, class, or hook before opening files.
+- Read only the line range that an edit will touch.
+- Order a multi-file change so a module is edited after the files it depends on, and see import cycles first.
+- Check syntax of the files just changed before treating the task as finished.
+- Block a commit that introduces a syntax error, using the optional git hook below.
 
----
+The same jobs are available as shell commands (`ctx map`, `ctx query`, `ctx slice`, `ctx graph`, `ctx check`) and as MCP tools. Use the shell commands from a terminal. Use the MCP tools when the agent harness can call tools on the `agent-context-engine` server. Cursor exposes that server as `user-agent-context-engine`; the tool names below do not change.
 
-## Model Context Protocol (MCP) Integration
+## Calling tools from an agent harness
 
-The Agent Context Engine is a first-class MCP server exposing the following 5 tools:
-- `ctx_get_map(workspace_path?: string)`: Retrieves or generates minified metadata map.
-- `ctx_query_symbol(symbol: string, workspace_path?: string)`: Searches symbols without reading raw files.
-- `ctx_slice(file_path: string, start_line: number, end_line: number)`: Returns surgical line ranges.
-- `ctx_check(workspace_path?: string, check_all?: boolean)`: Executes local compilers and returns diagnostics.
-- `ctx_get_graph(workspace_path?: string)`: Returns dependency topologies and topological edit sequence.
+Connect the server with `ctx mcp --install`, then reload MCP in the editor. The MCP process working directory is not the project. Pass an absolute `workspace_path` on every tool that accepts it. Do not pass `$HOME` or a drive root; those calls are refused.
 
----
+Call the tools in this order:
 
-## Automated Testing
+1. `ctx_get_map` — once per task, before searching or reading. Argument: `workspace_path` (absolute project root). The result is the structural index.
+2. `ctx_query_symbol` — when the name of a function, class, method, or hook is known. Arguments: `symbol` (required), `workspace_path` (same absolute root). The result names the relative file and the match. A function match includes its argument names and the line of the definition. A method match is reported on the class declaration line. The result does not include the function body. If the index is missing, this call builds it first.
+3. `ctx_slice` — when that body, or any other range, is required. Arguments: `file_path` (absolute path to the file), `start_line`, `end_line` (both 1-indexed, inclusive). A reversed range is swapped. The server returns at most 150 lines. A relative `file_path` is resolved from the MCP process directory, not from the project, so pass an absolute path.
+4. `ctx_get_graph` — before a change that spans several files. Argument: `workspace_path`. The result lists entry points, cycles, and a topological order. If the index is missing, this call builds it.
+5. `ctx_check` — after the edit, before the agent reports completion. Arguments: `workspace_path`, and `check_all` (`false` to check uncommitted or recently modified files, `true` to walk the tree). `[SKIP]` means that file type was not checked. `[FAIL]` means a checker reported a syntax error.
 
-Run the included comprehensive test harness (engine, parsers, dependency graphs, hooks, and MCP server):
+A harness that has a shell but no MCP client should run the matching `ctx` command from the project root instead of calling these tools.
+
+### Optional git hook
+
+From this repository root, the hook runs `ctx check` before each commit.
+
+Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-hooks.ps1
+```
+
+macOS and Linux:
 
 ```bash
-# Via Python
+bash scripts/install-hooks.sh
+```
+
+Skip one commit with `git commit --no-verify` or `SKIP_CTX=1`.
+
+## Tests
+
+From the repository root:
+
+```bash
 python -m unittest discover -s tests -p "test_*.py" -v
-
-# Via PowerShell
-powershell -ExecutionPolicy Bypass -File scripts/test.ps1
 ```
 
----
+Windows PowerShell:
 
-## Repository Structure
-
-```
-Global_Context_Orchestration/
-├── bin/
-│   ├── ctx.cmd               # Windows Command Prompt launcher
-│   ├── ctx.ps1               # PowerShell launcher
-│   └── ctx                   # POSIX Bash launcher
-├── src/
-│   ├── engine.py             # Core engine, parsers, dependency graphs & CLI
-│   └── mcp_server.py         # MCP stdio JSON-RPC 2.0 server & editor sync
-├── scripts/
-│   ├── deploy.ps1            # Global Windows deployment automation
-│   ├── deploy.sh             # Global Unix/macOS/Linux deployment script
-│   ├── install-hooks.ps1     # Pre-commit git hook installer (Windows)
-│   ├── install-hooks.sh      # Pre-commit git hook installer (Bash)
-│   └── test.ps1              # Automated test runner
-├── tests/
-│   ├── test_engine.py        # Core engine, polyglot parsers, dependency graph tests
-│   ├── test_hooks.py         # Git pre-commit hook interception tests
-│   └── test_mcp_server.py    # MCP protocol handshake, tools, editor sync tests
-├── AGENTS.md                 # Loop + constraints for agents in this repo
-├── docs/
-│   ├── ARCHITECTURE.md       # Technical design & token economics
-│   ├── AGENT_TRAINING.md     # AI agent behavioral instruction manual
-│   ├── AGENT_MEMORY.md       # Hard-won invariants for future agents
-│   ├── EDITOR_INTEGRATION.md # Cross-editor MCP & prompt injection guide
-│   ├── OPERATOR_RUNBOOK.md   # Install, operate, troubleshoot
-│   └── DEVELOPMENT_ROADMAP.md# Evolutionary roadmap & milestone log
-├── .agent-context.json       # Minified project structural metadata
-└── README.md                 # Master project documentation
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1
 ```
 
----
+## Repository layout
+
+```
+├── bin/                  ctx, ctx.cmd, ctx.ps1 (launch src/engine.py)
+├── src/engine.py         Parsers, map, graph, slice, check, CLI
+├── src/mcp_server.py     stdio MCP server and editor installer
+├── scripts/              deploy, pre-commit hook, test runner
+├── tests/                unittest suite
+├── docs/                 Architecture, editor setup, agent notes, runbook
+├── AGENTS.md             Constraints for agents editing this repo
+├── LICENSE               MIT
+└── README.md
+```
+
+Generated locally and not committed: `.agent-context.json`.
+
+Further reading:
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — parsing and index design
+- [docs/EDITOR_INTEGRATION.md](docs/EDITOR_INTEGRATION.md) — per-editor MCP config
+- [docs/AGENT_MEMORY.md](docs/AGENT_MEMORY.md) — invariants for people changing the protocol or installer
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to change the code
+- [SECURITY.md](SECURITY.md) — how to report a vulnerability
+
+## Troubleshooting
+
+**`ctx` is not recognized.** Open a new terminal. Windows: user PATH should include `%USERPROFILE%\.agent-context-engine`. macOS and Linux: `export PATH="$HOME/.agent-context-engine:$PATH"`.
+
+**Python was not found.** Reinstall Python 3.8+ and put it on `PATH`. On Windows, avoid `pythonw.exe` for the MCP server; the installer pins `python.exe`.
+
+**`ctx map` refuses the directory.** It will not walk your home folder or a drive root. `cd` into the project and run `ctx map` again.
+
+**Editor MCP discovery fails with invalid JSON.** The server must print only JSON-RPC on stdout. Redeploy, run `ctx mcp --install`, and reload MCP servers in the editor.
+
+**`ctx mcp --install` skipped an editor.** Open that editor once so it creates its config file, or repair invalid JSON, then run the command again.
+
+## Update and uninstall
+
+To update, pull this repository and run `scripts/deploy.ps1` or `scripts/deploy.sh` again, then `ctx mcp --install`.
+
+To remove the install:
+
+1. Delete the `%USERPROFILE%\.agent-context-engine` directory (Windows) or `$HOME/.agent-context-engine` (macOS and Linux).
+2. On Windows, remove that directory from your user `PATH`. On macOS and Linux, remove the `export PATH="$HOME/.agent-context-engine:$PATH"` line from your shell profile.
+3. Remove the `agent-context-engine` entry from each editor's MCP config. Paths are listed in [docs/EDITOR_INTEGRATION.md](docs/EDITOR_INTEGRATION.md).
+4. If you installed the git hook, delete `.git/hooks/pre-commit` in repositories where you installed it.
+
+## Attribution
+
+This repository is original source. It does not vendor third-party application code, and it has no package dependencies.
+
+It implements the public [Model Context Protocol](https://modelcontextprotocol.io/) specification (legacy `initialize` through `2025-11-25`, and `server/discover` for `2026-07-28`). The protocol specification is not included in this repository. Graph ordering uses standard depth-first cycle detection and Kahn's algorithm; those algorithms are not copied from another project.
+
+If you copy or redistribute this project, keep the copyright notice and the MIT license text. See [LICENSE](LICENSE).
 
 ## License
 
-Internal Developer Utility — Designed for optimal local LLM performance and token preservation.
-
+[MIT](LICENSE) © 2026 Jayaram Nambiar

@@ -1,3 +1,33 @@
+# Generated workspace index. Contains the absolute workspace path for MCP
+# clients. Regenerate with `ctx map`. Do not commit it.
+.agent-context.json
+
+# Secrets, credentials, and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
+
+# Logs and local dumps
+*.log
+logs/
+*.trace
+npm-debug.log*
+pip-log.txt
+
+# Python environments
+venv/
+.venv/
+env/
+.python-version
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

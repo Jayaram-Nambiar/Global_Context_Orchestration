@@ -14,14 +14,19 @@ The Agent Context Engine connects to AI coding agents via two complementary chan
 
 ## 2. Model Context Protocol (MCP) Setup
 
-You can automatically configure all supported editors with a single command:
-```bash
-ctx mcp --install
-```
-This writes the absolute Python interpreter path and `-u` (unbuffered stdio) into each editor config. Manual examples below use `python`; prefer the installer's resolved path on Windows.
-Or run the deployment scripts:
-- **Windows**: `powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1`
-- **macOS / Linux**: `bash scripts/deploy.sh`
+Install from the repository root first (`README.md`). Then run `ctx mcp --install`. That command writes the absolute Python interpreter path and `-u` (unbuffered stdio) into each editor config. Manual examples below use `python`; on Windows, prefer the interpreter path the installer writes.
+
+### Installed server path
+
+`ctx mcp --install` writes the absolute path for the current machine. Manual configs must use that same absolute path. The server is installed outside this repository:
+
+| Operating system | Path to `mcp_server.py` |
+| :--- | :--- |
+| Windows | `%USERPROFILE%\.agent-context-engine\mcp_server.py` |
+| macOS | `$HOME/.agent-context-engine/mcp_server.py` |
+| Linux | `$HOME/.agent-context-engine/mcp_server.py` |
+
+In JSON or TOML, paste the expanded path for your account. Examples below use `<path-to-mcp_server.py>` as that placeholder. Do not commit an expanded home-directory path.
 
 ### Manual MCP Configurations
 
@@ -35,7 +40,7 @@ Or run the deployment scripts:
         "command": "python",
         "args": [
           "-u",
-          "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"
+          "<path-to-mcp_server.py>"
         ]
       }
     }
@@ -55,7 +60,7 @@ Or run the deployment scripts:
         "command": "python",
         "args": [
           "-u",
-          "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"
+          "<path-to-mcp_server.py>"
         ]
       }
     }
@@ -72,7 +77,7 @@ Or run the deployment scripts:
         "command": "python",
         "args": [
           "-u",
-          "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"
+          "<path-to-mcp_server.py>"
         ]
       }
     }
@@ -91,7 +96,7 @@ Or run the deployment scripts:
         "command": [
           "python",
           "-u",
-          "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"
+          "<path-to-mcp_server.py>"
         ],
         "enabled": true
       }
@@ -108,7 +113,7 @@ Or run the deployment scripts:
       "agent-context-engine": {
         "type": "stdio",
         "command": "python",
-        "args": ["-u", "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"]
+        "args": ["-u", "<path-to-mcp_server.py>"]
       }
     }
   }
@@ -123,7 +128,7 @@ Or run the deployment scripts:
       "agent-context-engine": {
         "type": "stdio",
         "command": "python",
-        "args": ["-u", "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"]
+        "args": ["-u", "<path-to-mcp_server.py>"]
       }
     }
   }
@@ -135,7 +140,7 @@ Or run the deployment scripts:
   ```toml
   [mcp_servers.agent-context-engine]
   command = "python"
-  args = ["-u", "C:\\Users\\<username>\\.agent-context-engine\\mcp_server.py"]
+  args = ["-u", "<path-to-mcp_server.py>"]
   ```
 
 #### Antigravity IDE (live config)

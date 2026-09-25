@@ -1023,6 +1023,8 @@ def cmd_map(workspace_path: Path):
     index_data = {
         "meta": {
             "version": VERSION,
+            # Absolute on purpose: MCP clients pass this path back as workspace_path.
+            # The index is gitignored so this machine path is not committed.
             "root": str(workspace_path).replace("\\", "/"),
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "total_files": 0,

@@ -29,23 +29,15 @@ Modern AI coding agents (such as Cursor, OpenCode, Claude Code, and Antigravity)
 - Requires no `pip install`, no `node_modules`, no external C++ compilers, and no background daemon services.
 - Runs instantaneously with execution times under 50ms for typical codebases.
 
-### Pillar 2: Token Economics & Structural Indexing
-Rather than ingesting full raw source code into LLM prompts, `ctx` extracts structural skeletons:
-- **File path & total lines**
-- **Classes, base classes (inheritance), and methods**
-- **Functions, arguments, and async signatures**
-- **Exported constants**
-- **Cross-boundary side-effect hooks** (network APIs, shell executions)
+### Pillar 2: Structural index
+Rather than sending full source to an agent, `ctx map` records:
+- File path and line count
+- Classes, base classes, and methods
+- Functions, arguments, and async signatures
+- Exported constants
+- Cross-boundary hooks (network APIs, shell execution)
 
-#### Token Comparison Model
-
-| Approach | Typical Token Overhead (50 Files) | Information Density | Risk of Hallucination |
-| :--- | :--- | :--- | :--- |
-| **Full File Reading** | ~60,000 - 120,000 tokens | Low (mostly implementation details) | High (context saturation) |
-| **Vector RAG Chunks** | ~15,000 - 30,000 tokens | Fragmented (misses file-wide relationships)| Medium (chunk boundary misses) |
-| **`ctx` Structural Map**| **~1,200 - 2,500 tokens** | **Extremely High (symbol signatures & hooks)** | **Lowest (deterministic index)** |
-
-**Savings**: Over **85% reduction** in tokens ingested during initial context acquisition.
+`ctx map` prints a rough size comparison for that run (map bytes versus source bytes). That figure is not a benchmark.
 
 ---
 
@@ -123,14 +115,9 @@ Each checker subprocess has a 20-second timeout. `ctx map` / `ctx check` refuse 
 
 ---
 
-## 5. Dual-era MCP transport (`src/mcp_server.py`)
+## 5. MCP transport
 
-The server is **stdio JSON-RPC only**. It speaks two client generations:
-
-- **Legacy (Cursor, Claude Desktop, 2024-11-05 … 2025-11-25):** `initialize` negotiates `protocolVersion`, `ping` remains, `tools/list` + `tools/call`.
-- **Modern (MCP 2026-07-28):** clients MAY skip `initialize` and call `server/discover`. Discover results include `resultType`, `supportedVersions`, `ttlMs`, and `cacheScope`. Identity lives in `_meta.io.modelcontextprotocol/serverInfo`.
-
-Stdout isolation (`sys.stdout = sys.stderr`, RPC on the original stdout) is a correctness requirement, not a style choice. See `docs/AGENT_MEMORY.md`.
+The server is stdio JSON-RPC only. Handshake rules, editor config shapes, and the failure history live in [AGENT_MEMORY.md](AGENT_MEMORY.md). Do not keep a second copy of that table here.
 
 ---
 
